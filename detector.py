@@ -1,6 +1,7 @@
 import pickle
 import cv2
 import numpy as np
+import math
 import matplotlib.pyplot as plt
 import matplotlib.image as mpimg
 
@@ -152,6 +153,7 @@ class Detector():
         # Set lane line detection uninitialized
         self.InitializedLD = False
 
+        self.ploty = None
         self.undist = None
         # Define conversions in x and y from pixels space to meters
         self.ym_per_pix = 30 / 720  # meters per pixel in y dimension
@@ -327,8 +329,8 @@ class Detector():
             self.initDetection(binary_warped)
             pass
 
-        #return self.visualizeInput(img)
-        return self.visualizeDetection(binary_warped)
+        return self.visualizeInput(img)
+        #return self.visualizeDetection(binary_warped)
 
     def visualizeDetection(self, img):
         """Plot the detection result on the warped binary image"""
@@ -399,13 +401,32 @@ class Detector():
         # Combine the result with the original image
         result = cv2.addWeighted(self.undist, 1, newwarp, 0.3, 0)
 
+        curvts = self.getCurvature()
+        cv2.putText(result, "Radius of curvature = {:4d}".format(math.floor(curvts[0])),
+                    (10, 100), cv2.FONT_HERSHEY_SIMPLEX, 2, 255, thickness=1)
+
         #plt.imshow(result)
         #plt.show()
         return result
 
     def getCurvature(self):
         """Calculate curvature of two lines"""
-        return 100,100
+        # Fit new polynomials to x,y in world space
+        ploty = self.ploty
+        ym_per_pix = self.ym_per_pix
+        xm_per_pix = self.xm_per_pix
+        leftx = self.LeftLine.recent_xfitted
+        rightx = self.RightLine.recent_xfitted
+        y_eval = np.max(ploty)
+
+        left_fit_cr = np.polyfit(ploty * ym_per_pix, leftx * xm_per_pix, 2)
+        right_fit_cr = np.polyfit(ploty * ym_per_pix, rightx * xm_per_pix, 2)
+        # Calculate the new radii of curvature
+        left_curverad = ((1 + (2 * left_fit_cr[0] * y_eval * ym_per_pix + left_fit_cr[1]) ** 2) ** 1.5) / \
+                        np.absolute(2 * left_fit_cr[0])
+        right_curverad = ((1 + (2 * right_fit_cr[0] * y_eval * ym_per_pix + right_fit_cr[1]) ** 2) ** 1.5) / \
+                         np.absolute(2 * right_fit_cr[0])
+        return left_curverad, right_curverad
 
     def distance(self):
         print("The distance of two lines is .")
@@ -431,21 +452,22 @@ class Detector():
         return cv2.warpPerspective(img, self.WarpMatrixInv, (img.shape[1], img.shape[0]))
 
 
-# Read in the saved camera matrix and distortion coefficients
-dist_pickle = pickle.load( open( "camera_cal/wide_dist_pickle.p", "rb" ) )
-mtx = dist_pickle["mtx"]
-dist = dist_pickle["dist"]
-M = dist_pickle["M"]
-Minv = dist_pickle["Minv"]
+def test():
+    # Read in the saved camera matrix and distortion coefficients
+    dist_pickle = pickle.load( open( "camera_cal/wide_dist_pickle.p", "rb" ) )
+    mtx = dist_pickle["mtx"]
+    dist = dist_pickle["dist"]
+    M = dist_pickle["M"]
+    Minv = dist_pickle["Minv"]
 
-a = Detector(mtx=mtx, dist=dist, M=M, Minv=Minv)
-a.distance()
-a.LeftLine.test()
+    a = Detector(mtx=mtx, dist=dist, M=M, Minv=Minv)
+    a.distance()
+    a.LeftLine.test()
 
-img = mpimg.imread('test_images/straight_lines1.jpg')
-tmp = a.detect(img)
+    img = mpimg.imread('test_images/straight_lines1.jpg')
+    tmp = a.detect(img)
 
 
-plt.imshow(tmp)
-plt.show()
+    plt.imshow(tmp)
+    plt.show()
 

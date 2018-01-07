@@ -79,10 +79,8 @@ class DirGrad(Gradient):
 class SXGrad(Gradient):
     """Calculate S-Channel and X directional sobel gradient"""
     def preprocess(self, img):
-        # Undistortion
-        dst = cv2.undistort(img, mtx, dist, None, mtx)
         # grayscale image
-        gray = cv2.cvtColor(dst, cv2.COLOR_RGB2GRAY)
+        gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
         # sobel operation applied to x axis
         sobelx = cv2.Sobel(gray, cv2.CV_64F, 1, 0)
         # Get absolute values
@@ -155,6 +153,8 @@ class Detector():
 
         self.ploty = None
         self.undist = None
+
+        self.margin = 50
         # Define conversions in x and y from pixels space to meters
         self.ym_per_pix = 30 / 720  # meters per pixel in y dimension
         self.xm_per_pix = 3.7 / 700  # meters per pixel in x dimension
@@ -178,6 +178,7 @@ class Detector():
         return self.Gradient.preprocess(img)
 
     def initDetection(self, binary_warped):
+        self.InitializedLD = True
         # Create an output image to draw on and  visualize the result
         out_img = np.dstack((binary_warped, binary_warped, binary_warped)) * 255
         # Find the peak of the left and right halves of the histogram
@@ -199,7 +200,7 @@ class Detector():
         leftx_current = leftx_base
         rightx_current = rightx_base
         # Set the width of the windows +/- margin
-        margin = 50
+        margin = self.margin
         # Set minimum number of pixels found to recenter window
         minpix = 50
         # Create empty lists to receive left and right lane pixel indices
@@ -282,7 +283,7 @@ class Detector():
             nonzero = binary_warped.nonzero()
             nonzeroy = np.array(nonzero[0])
             nonzerox = np.array(nonzero[1])
-            margin = 100
+            margin = self.margin
 
             left_fit = self.LeftLine.current_fit
             right_fit = self.RightLine.current_fit
@@ -306,7 +307,7 @@ class Detector():
             left_fit = np.polyfit(lefty, leftx, 2)
             right_fit = np.polyfit(righty, rightx, 2)
 
-            self.LeftLine.diffs = left_fit-self.LeftLine.current_fit
+            self.LeftLine.diffs = left_fit - self.LeftLine.current_fit
             self.LeftLine.current_fit = left_fit
             self.LeftLine.allx = leftx
             self.LeftLine.ally = lefty
@@ -323,11 +324,10 @@ class Detector():
 
             self.LeftLine.recent_xfitted = left_fitx
             self.RightLine.recent_xfitted = right_fitx
-            return left_fit, right_fit, left_lane_inds, right_lane_inds
+
         else:
             # Reset the detection
             self.initDetection(binary_warped)
-            pass
 
         return self.visualizeInput(img)
         #return self.visualizeDetection(binary_warped)
@@ -350,7 +350,8 @@ class Detector():
         ploty = self.ploty
         left_fitx = self.LeftLine.recent_xfitted
         right_fitx = self.RightLine.recent_xfitted
-        margin = 50
+        margin = self.margin
+
         # Generate a polygon to illustrate the search window area
         # And recast the x and y points into usable format for cv2.fillPoly()
         left_line_window1 = np.array([np.transpose(np.vstack([left_fitx - margin, ploty]))])
@@ -407,7 +408,7 @@ class Detector():
 
         #plt.imshow(result)
         #plt.show()
-        return result
+        return result.astype(np.uint8)
 
     def getCurvature(self):
         """Calculate curvature of two lines"""
@@ -467,7 +468,10 @@ def test():
     img = mpimg.imread('test_images/straight_lines1.jpg')
     tmp = a.detect(img)
 
+    img = mpimg.imread('test_images/straight_lines1.jpg')
+    tmp = a.detect(img)
 
     plt.imshow(tmp)
     plt.show()
 
+#test()

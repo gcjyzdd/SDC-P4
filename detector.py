@@ -23,8 +23,9 @@ class Gradient():
     def preprocess(self, img):
         pass
 
+
 class AbsGrad(Gradient):
-    '''Calculate directional gradient'''
+    """Calculate directional gradient"""
     def preprocess(self, img):
         gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
         # Apply x direction
@@ -35,8 +36,9 @@ class AbsGrad(Gradient):
         sxbinary[(scaled_sobel >= self.sx_thresh[0]) & (scaled_sobel <= self.sx_thresh[1])] = 1
         return sxbinary
 
+
 class MagGrad(Gradient):
-    '''Calculate gradient magnitude'''
+    """Calculate gradient magnitude"""
     def preprocess(self, img):
         gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
         # 2) Take the gradient in x and y separately
@@ -51,8 +53,9 @@ class MagGrad(Gradient):
         sxbinary[(scaled_mag >= self.sx_thresh[0]) & (scaled_mag <= self.sx_thresh[1])] = 1
         return sxbinary
 
+
 class DirGrad(Gradient):
-    '''Calculate gradient direction'''
+    """Calculate gradient direction"""
     def preprocess(self, img):
         # 1) Convert to grayscale
         gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
@@ -71,8 +74,9 @@ class DirGrad(Gradient):
         # 6) Return this mask as your binary_output image
         return sxbinary
 
+
 class SXGrad(Gradient):
-    '''Calculate S-Channel and X directional sobel gradient'''
+    """Calculate S-Channel and X directional sobel gradient"""
     def preprocess(self, img):
         # Undistortion
         dst = cv2.undistort(img, mtx, dist, None, mtx)
@@ -132,12 +136,13 @@ class Line():
 
 
 class Detector():
-    def __init__(self, mtx, dist, M, sx_thresh=(20,100), s_thresh=(170,255)):
-        '''Initialization of lane line detector object'''
+    def __init__(self, mtx, dist, M, Minv, sx_thresh=(20,100), s_thresh=(170,255)):
+        """Initialization of lane line detector object"""
         # Set camera calibration and warp perspective
         self.CameraMatrix = mtx
         self.Distortion = dist
         self.WarpMatrix = M
+        self.WarpMatrixInv = Minv
 
         self.Gradient = Gradient()
         self.setBinaryFun(3)
@@ -147,8 +152,13 @@ class Detector():
         # Set lane line detection uninitialized
         self.InitializedLD = False
 
+        self.undist = None
+        # Define conversions in x and y from pixels space to meters
+        self.ym_per_pix = 30 / 720  # meters per pixel in y dimension
+        self.xm_per_pix = 3.7 / 700  # meters per pixel in x dimension
+
     def setBinaryFun(self, flag=0):
-        '''Set the method to generate binary gradient output of a RGB image'''
+        """Set the method to generate binary gradient output of a RGB image"""
         if flag==0:
             self.Gradient = AbsGrad()
         elif flag==1:
@@ -161,7 +171,8 @@ class Detector():
             raise 'Invalid flag:'+str(flag)
 
     def performBinary(self, img):
-        '''Get the binary gradient output of a RGB image'''
+        """Get the binary gradient output of a RGB image"""
+
         return self.Gradient.preprocess(img)
 
     def initDetection(self, binary_warped):
@@ -246,14 +257,22 @@ class Detector():
         self.RightLine.allx = rightx
         self.RightLine.ally = righty
 
+        # Generate x and y values for plotting
+        ploty = np.linspace(0, binary_warped.shape[0] - 1, binary_warped.shape[0])
+        left_fitx = left_fit[0] * ploty ** 2 + left_fit[1] * ploty + left_fit[2]
+        right_fitx = right_fit[0] * ploty ** 2 + right_fit[1] * ploty + right_fit[2]
+
+        self.ploty = ploty
+        self.LeftLine.recent_xfitted = left_fitx
+        self.RightLine.recent_xfitted = right_fitx
         return out_img
 
     def detect(self, img):
-        '''Detect lane lines on an image'''
+        """Detect lane lines on an image"""
 
         # preprocessing img
-        dst = self._undistort(img)
-        binary = self.performBinary(dst)
+        self.undist = self._undistort(img)
+        binary = self.performBinary(self.undist)
         binary_warped = self._warp(binary)
 
         if self.InitializedLD:
@@ -285,45 +304,131 @@ class Detector():
             left_fit = np.polyfit(lefty, leftx, 2)
             right_fit = np.polyfit(righty, rightx, 2)
 
+            self.LeftLine.diffs = left_fit-self.LeftLine.current_fit
             self.LeftLine.current_fit = left_fit
             self.LeftLine.allx = leftx
             self.LeftLine.ally = lefty
 
+            self.RightLine.diffs = right_fit - self.RightLine.current_fit
             self.RightLine.current_fit = right_fit
             self.RightLine.allx = rightx
             self.RightLine.ally = righty
 
             # Generate x and y values for plotting
-            ploty = np.linspace(0, binary_warped.shape[0] - 1, binary_warped.shape[0])
+            ploty = self.ploty
             left_fitx = left_fit[0] * ploty ** 2 + left_fit[1] * ploty + left_fit[2]
             right_fitx = right_fit[0] * ploty ** 2 + right_fit[1] * ploty + right_fit[2]
+
+            self.LeftLine.recent_xfitted = left_fitx
+            self.RightLine.recent_xfitted = right_fitx
             return left_fit, right_fit, left_lane_inds, right_lane_inds
-            pass
         else:
             # Reset the detection
-            return self.initDetection(binary_warped)
+            self.initDetection(binary_warped)
             pass
 
-        return binary_warped
+        #return self.visualizeInput(img)
+        return self.visualizeDetection(binary_warped)
 
     def visualizeDetection(self, img):
-        '''Plot the detection result on the image'''
+        """Plot the detection result on the warped binary image"""
+        # Create an image to draw on and an image to show the selection window
+        if len(img.shape) > 2:
+            out_img = np.copy(img)
+        else:
+            out_img = np.dstack((img, img, img)) * 255
 
-        pass
+        window_img = np.zeros_like(out_img)
+        # Color in left and right line pixels
+        #out_img[nonzeroy[left_lane_inds], nonzerox[left_lane_inds]] = [255, 0, 0]
+        #out_img[nonzeroy[right_lane_inds], nonzerox[right_lane_inds]] = [0, 0, 255]
+
+        left_fit = self.LeftLine.current_fit
+        right_fit = self.RightLine.current_fit
+        ploty = self.ploty
+        left_fitx = self.LeftLine.recent_xfitted
+        right_fitx = self.RightLine.recent_xfitted
+        margin = 50
+        # Generate a polygon to illustrate the search window area
+        # And recast the x and y points into usable format for cv2.fillPoly()
+        left_line_window1 = np.array([np.transpose(np.vstack([left_fitx - margin, ploty]))])
+        left_line_window2 = np.array([np.flipud(np.transpose(np.vstack([left_fitx + margin,
+                                                                        ploty])))])
+        left_line_pts = np.hstack((left_line_window1, left_line_window2))
+        right_line_window1 = np.array([np.transpose(np.vstack([right_fitx - margin, ploty]))])
+        right_line_window2 = np.array([np.flipud(np.transpose(np.vstack([right_fitx + margin,
+                                                                         ploty])))])
+        right_line_pts = np.hstack((right_line_window1, right_line_window2))
+
+        # Draw the lane onto the warped blank image
+        cv2.fillPoly(window_img, np.int_([left_line_pts]), (0, 255, 0))
+        cv2.fillPoly(window_img, np.int_([right_line_pts]), (0, 255, 0))
+        result = cv2.addWeighted(out_img, 1, window_img, 0.3, 0)
+
+        result[ploty.astype(np.int32), left_fitx.astype(np.int32) ] = [255, 0, 255]
+        result[ploty.astype(np.int32), right_fitx.astype(np.int32)] = [255, 0, 255]
+
+        #plt.imshow(result)
+        #plt.plot(left_fitx, ploty, color='yellow')
+        #plt.plot(right_fitx, ploty, color='yellow')
+        #plt.xlim(0, 1280)
+        #plt.ylim(720, 0)
+        #plt.show()
+        return result
+
+    def visualizeInput(self, img):
+        """Plot the result on the input RGB image"""
+
+        # Create an image to draw the lines on
+        color_warp = np.zeros_like(img).astype(np.uint8)
+        #color_warp = np.dstack((warp_zero, warp_zero, warp_zero))
+
+        left_fitx = self.LeftLine.recent_xfitted
+        right_fitx = self.RightLine.recent_xfitted
+        ploty = self.ploty
+        # Recast the x and y points into usable format for cv2.fillPoly()
+        pts_left = np.array([np.transpose(np.vstack([left_fitx, ploty]))])
+        pts_right = np.array([np.flipud(np.transpose(np.vstack([right_fitx, ploty])))])
+        pts = np.hstack((pts_left, pts_right))
+
+        # Draw the lane onto the warped blank image
+        cv2.fillPoly(color_warp, np.int_([pts]), (0, 255, 0))
+
+        # Warp the blank back to original image space using inverse perspective matrix (Minv)
+        newwarp = self._invwarp(color_warp)#cv2.warpPerspective(color_warp, self.WarpMatrixInv, (img.shape[1], img.shape[0]))
+        # Combine the result with the original image
+        result = cv2.addWeighted(self.undist, 1, newwarp, 0.3, 0)
+
+        #plt.imshow(result)
+        #plt.show()
+        return result
+
+    def getCurvature(self):
+        """Calculate curvature of two lines"""
+        return 100,100
 
     def distance(self):
         print("The distance of two lines is .")
         return 1.0
+
+    def _calculateCurvature(self, fit):
+        pass
 
     def _gaussian_blur(img, kernel_size=5):
         """Applies a Gaussian Noise kernel"""
         return cv2.GaussianBlur(img, (kernel_size, kernel_size), 0)
 
     def _undistort(self, img):
+        """Apply image undistortion"""
         return cv2.undistort(img, self.CameraMatrix, self.Distortion, None, self.CameraMatrix)
 
     def _warp(self, img):
+        """Apply image warp transformation"""
         return cv2.warpPerspective(img, self.WarpMatrix, (img.shape[1], img.shape[0]))
+
+    def _invwarp(self, img):
+        """Apply image inverse warp transformation"""
+        return cv2.warpPerspective(img, self.WarpMatrixInv, (img.shape[1], img.shape[0]))
 
 
 # Read in the saved camera matrix and distortion coefficients
@@ -331,14 +436,16 @@ dist_pickle = pickle.load( open( "camera_cal/wide_dist_pickle.p", "rb" ) )
 mtx = dist_pickle["mtx"]
 dist = dist_pickle["dist"]
 M = dist_pickle["M"]
+Minv = dist_pickle["Minv"]
 
-a = Detector(mtx=mtx, dist=dist, M=M)
+a = Detector(mtx=mtx, dist=dist, M=M, Minv=Minv)
 a.distance()
 a.LeftLine.test()
 
 img = mpimg.imread('test_images/straight_lines1.jpg')
 tmp = a.detect(img)
 
-plt.imshow(tmp, cmap='gray')
+
+plt.imshow(tmp)
 plt.show()
 

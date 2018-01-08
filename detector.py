@@ -152,12 +152,16 @@ class Detector():
         self.InitializedLD = False
 
         self.ploty = None
+        self.img = None
         self.undist = None
 
         self.margin = 50
         # Define conversions in x and y from pixels space to meters
         self.ym_per_pix = 30 / 720  # meters per pixel in y dimension
         self.xm_per_pix = 3.7 / 700  # meters per pixel in x dimension
+
+        self.FitLeft = []
+        self.FitRight = []
 
     def setBinaryFun(self, flag=0):
         """Set the method to generate binary gradient output of a RGB image"""
@@ -273,6 +277,7 @@ class Detector():
     def detect(self, img):
         """Detect lane lines on an image"""
 
+        self.img = img
         # preprocessing img
         self.undist = self._undistort(img)
         binary = self.performBinary(self.undist)
@@ -329,7 +334,9 @@ class Detector():
             # Reset the detection
             self.initDetection(binary_warped)
 
-        return self.visualizeInput(img)
+        self.FitLeft.append(self.LeftLine.current_fit)
+        self.FitRight.append(self.RightLine.current_fit)
+        return self.visualizeInput()
         #return self.visualizeDetection(binary_warped)
 
     def visualizeDetection(self, img):
@@ -379,11 +386,11 @@ class Detector():
         #plt.show()
         return result
 
-    def visualizeInput(self, img):
+    def visualizeInput(self):
         """Plot the result on the input RGB image"""
 
         # Create an image to draw the lines on
-        color_warp = np.zeros_like(img).astype(np.uint8)
+        color_warp = np.zeros_like(self.img).astype(np.uint8)
         #color_warp = np.dstack((warp_zero, warp_zero, warp_zero))
 
         left_fitx = self.LeftLine.recent_xfitted
@@ -452,6 +459,44 @@ class Detector():
         """Apply image inverse warp transformation"""
         return cv2.warpPerspective(img, self.WarpMatrixInv, (img.shape[1], img.shape[0]))
 
+    def plotFit(self):
+        self._plotFit(self.FitLeft)
+        self._plotFit(self.FitRight)
+
+    def _plotFit(self, fits):
+        x = np.array(fits)
+        L = x.shape[0]
+        t = np.arange(0,L,1)
+
+        plt.figure(1)
+        plt.subplot(311)
+        plt.plot(t, x[:, 0])
+        plt.title('fit[0]')
+        plt.grid(True)
+
+        plt.subplot(312)
+        plt.plot(t, x[:, 1])
+        plt.title('fit[1]')
+        plt.grid(True)
+
+        plt.subplot(313)
+        plt.plot(t, x[:, 2])
+        plt.title('fit[2]')
+        plt.grid(True)
+
+        '''
+        f, (ax1, ax2, ax3) = plt.subplots(3, sharex=True, sharey=False)
+
+
+        ax1.plot(t, x[:,0])
+        ax1.title('fit0')
+        ax2.plot(t, x[:,1])
+        ax2.title('fit[1]')
+        ax3.plot(t, x[:,2])
+        ax3.title('fit[2]')
+        #f.subplots_adjust(hspace=0)
+        '''
+        plt.show()
 
 def test():
     # Read in the saved camera matrix and distortion coefficients
@@ -473,5 +518,7 @@ def test():
 
     plt.imshow(tmp)
     plt.show()
+
+    a.plotFit()
 
 #test()

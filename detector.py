@@ -134,6 +134,71 @@ class Line():
         print("Line prints here.")
 
 
+class KalmanFilter():
+    """Implement a simple Kalman filter"""
+    def __init__(self, n_in, q=(1,1,1), R=(1,1,1)):
+        self.P = np.array(q)#np.array([[q[0],0,0],[0,q[1],0],[0,0,q[2]]], np.float64)
+        self.R = np.array(R)#np.array([[R[0],0,0],[0,R[1],0],[0,0,R[2]]], np.float64)
+        self.K = None
+        self.P_pr = None
+        self.X = np.zeros((n_in, ), np.float64)
+
+        self.Init = False
+
+    def update(self, X_e):
+
+        if not self.Init:
+            self.Init = True
+            self.X = X_e
+            self.X_pr = self.X
+            self.P_pr = self.P
+            return self.X.flatten()
+
+        for i in range(3):
+            xe = X_e[i]
+            self.X_pr[i] = self.X[i]
+            K = self.P_pr[i]/(self.P_pr[i]+self.R[i])
+            self.X[i] = self.X_pr[i]+K*(X_e[i]-self.X_pr[i])
+            self.P[i] = (1-K)*self.P_pr[i]
+
+        return self.X.flatten()
+
+        X_e = X_e[:,None]
+        # time update
+        self.X_pr = self.X
+        self.P_pr = self.P
+
+        # time update
+        self.K = self.P_pr * np.linalg.inv(self.P_pr + self.R)
+        self.X = self.X_pr + np.matmul(self.K, (X_e-self.X_pr))
+        self.P = np.matmul((np.eye(3)-self.K), self.P_pr)
+
+        return self.X.flatten()
+
+    def updatebk(self, X_e):
+
+        if ~self.Init:
+            self.Init = True
+            self.X = X_e[:, None]
+            self.X_pr = self.X
+            return self.X.flatten()
+
+        X_e = X_e[:,None]
+        # time update
+        self.X_pr = self.X
+        self.P_pr = self.P
+
+        # time update
+        self.K = self.P_pr * np.linalg.inv(self.P_pr + self.R)
+        self.X = self.X_pr + np.matmul(self.K, (X_e-self.X_pr))
+        self.P = np.matmul((np.eye(3)-self.K), self.P_pr)
+
+        return self.X.flatten()
+
+    def printState(self):
+        print('X=', self.X)
+
+
 class Detector():
     def __init__(self, mtx, dist, M, Minv, sx_thresh=(20,100), s_thresh=(170,255)):
         """Initialization of lane line detector object"""
@@ -148,6 +213,10 @@ class Detector():
 
         self.LeftLine = Line()
         self.RightLine = Line()
+
+        self.KFLeft = KalmanFilter(3, q=(4e-8, 1e-2, 100), R=(1e-2, 100, 1000000))
+        self.KFRight = KalmanFilter(3, q=(4e-8, 1e-2, 100), R=(1e-2, 100, 1000000))
+
         # Set lane line detection uninitialized
         self.InitializedLD = False
 
@@ -333,6 +402,10 @@ class Detector():
         else:
             # Reset the detection
             self.initDetection(binary_warped)
+
+        ## Apply Kalman filter here
+        self.LeftLine.current_fit = self.KFLeft.update(self.LeftLine.current_fit)
+        self.RightLine.current_fit = self.KFRight.update(self.RightLine.current_fit)
 
         self.FitLeft.append(self.LeftLine.current_fit)
         self.FitRight.append(self.RightLine.current_fit)
@@ -521,4 +594,16 @@ def test():
 
     a.plotFit()
 
+def test2():
+    kf = KalmanFilter(3)
+    kf.printState()
+    print('return ',kf.update(np.array([1.2,0.5,0.9])))
+    print('return ', kf.update(np.array([1.2, 0.5, 0.9])+0.1))
+    kf.printState()
+
+def test3():
+    print('rt ', np.eye(3))
+
+#test3()
+#test2()
 #test()

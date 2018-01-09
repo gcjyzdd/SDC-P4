@@ -214,8 +214,8 @@ class Detector():
         self.LeftLine = Line()
         self.RightLine = Line()
 
-        self.KFLeft = KalmanFilter(3, q=(4e-8, 1e-2, 100), R=(1e-2, 100, 1000000))
-        self.KFRight = KalmanFilter(3, q=(4e-8, 1e-2, 100), R=(1e-2, 100, 1000000))
+        self.KFLeft = KalmanFilter(3, q=(4e-8, 1e-2, 100), R=(1e-4, 1, 10000))
+        self.KFRight = KalmanFilter(3, q=(4e-8, 1e-2, 100), R=(1e-4, 1, 10000))
 
         # Set lane line detection uninitialized
         self.InitializedLD = False

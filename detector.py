@@ -195,6 +195,10 @@ class KalmanFilter():
 
         return self.X.flatten()
 
+    def setPR(self,P,R):
+        self.P = P
+        self.R = R
+
     def printState(self):
         print('X=', self.X)
 
@@ -515,6 +519,10 @@ class Detector():
 
     def _calculateCurvature(self, fit):
         pass
+
+    def setKF_PR(self,P,R):
+        self.KFLeft.setPR(P, R)
+        self.KFRight.setPR(P,R)
 
     def _gaussian_blur(img, kernel_size=5):
         """Applies a Gaussian Noise kernel"""

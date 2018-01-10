@@ -162,12 +162,18 @@ class Line():
     def __init__(self):
         # was the line detected in the last iteration?
         self.detected = False
+        # Save n fits
+        self.N = 5
         # x values of the last n fits of the line
         self.recent_xfitted = []
         #average x values of the fitted line over the last n iterations
         self.bestx = None
-        #polynomial coefficients averaged over the last n iterations
+        # polynomial coefficients of the last n iterations
+        self.fits = []
+        # polynomial coefficients averaged over the last n iterations
         self.best_fit = None
+        # save polynomial coeffs of last iteration
+        self.last_fit = None
         #polynomial coefficients for the most recent fit
         self.current_fit = [np.array([False])]
         #radius of curvature of the line in some units
@@ -180,6 +186,9 @@ class Line():
         self.allx = None
         #y values for detected line pixels
         self.ally = None
+
+    def setNum(self, n):
+        self.N = n
 
     def test(self):
         print("Line prints here.")
@@ -240,7 +249,7 @@ class KalmanFilter():
         self.P_pr = self.P
 
         # time update
-        self.K = self.P_pr * np.linalg.inv(self.P_pr + self.R)
+        self.K = np.matmul(self.P_pr, np.linalg.inv(self.P_pr + self.R))
         self.X = self.X_pr + np.matmul(self.K, (X_e-self.X_pr))
         self.P = np.matmul((np.eye(3)-self.K), self.P_pr)
 
@@ -275,6 +284,9 @@ class Detector():
 
         # Set lane line detection uninitialized
         self.InitializedLD = False
+
+        # cache the states of last 5 iterations
+        self.cacheNum = 5
 
         self.ploty = None
         self.distTop = 0
@@ -318,6 +330,7 @@ class Detector():
         return self.Gradient.preprocess(img)
 
     def initDetection(self, binary_warped):
+        """Initialize the detection"""
         self.InitializedLD = True
         # Create an output image to draw on and  visualize the result
         out_img = np.dstack((binary_warped, binary_warped, binary_warped)) * 255
@@ -402,7 +415,7 @@ class Detector():
 
         ploty = np.linspace(0, binary_warped.shape[0] - 1, binary_warped.shape[0])
         self.ploty = ploty
-        """
+
         # Generate x and y values for plotting
         ploty = np.linspace(0, binary_warped.shape[0] - 1, binary_warped.shape[0])
         left_fitx = left_fit[0] * ploty ** 2 + left_fit[1] * ploty + left_fit[2]
@@ -411,8 +424,85 @@ class Detector():
         self.ploty = ploty
         self.LeftLine.recent_xfitted = left_fitx
         self.RightLine.recent_xfitted = right_fitx
-        """
+
+        self.distTop = np.absolute(left_fitx[0] - right_fitx[0])
+        self.distButtom = np.absolute(left_fitx[-1] - right_fitx[0])
         return out_img
+
+    def detectCtn(self, binary_warped):
+        """Continuous detection, based on previous detection"""
+        # Update last fit
+        self.LeftLine.last_fit = self.LeftLine.current_fit
+        self.RightLine.last_fit = self.RightLine.current_fit
+        # we know where the lines are in the previous frame
+        nonzero = binary_warped.nonzero()
+        nonzeroy = np.array(nonzero[0])
+        nonzerox = np.array(nonzero[1])
+        margin = self.margin
+
+        left_fit = self.LeftLine.current_fit
+        right_fit = self.RightLine.current_fit
+
+        left_lane_inds = ((nonzerox > (left_fit[0] * (nonzeroy ** 2) + left_fit[1] * nonzeroy +
+                                       left_fit[2] - margin)) & (nonzerox < (left_fit[0] * (nonzeroy ** 2) +
+                                                                             left_fit[1] * nonzeroy + left_fit[
+                                                                                 2] + margin)))
+
+        right_lane_inds = ((nonzerox > (right_fit[0] * (nonzeroy ** 2) + right_fit[1] * nonzeroy +
+                                        right_fit[2] - margin)) & (nonzerox < (right_fit[0] * (nonzeroy ** 2) +
+                                                                               right_fit[1] * nonzeroy + right_fit[
+                                                                                   2] + margin)))
+
+        # Again, extract left and right line pixel positions
+        leftx = nonzerox[left_lane_inds]
+        lefty = nonzeroy[left_lane_inds]
+        rightx = nonzerox[right_lane_inds]
+        righty = nonzeroy[right_lane_inds]
+        # Fit a second order polynomial to each
+        left_fit = np.polyfit(lefty, leftx, 2)
+        right_fit = np.polyfit(righty, rightx, 2)
+
+        self.LeftLine.diffs = left_fit - self.LeftLine.current_fit
+        self.LeftLine.current_fit = left_fit
+        self.LeftLine.allx = leftx
+        self.LeftLine.ally = lefty
+
+        self.RightLine.diffs = right_fit - self.RightLine.current_fit
+        self.RightLine.current_fit = right_fit
+        self.RightLine.allx = rightx
+        self.RightLine.ally = righty
+
+
+        # Generate x and y values for plotting
+        ploty = self.ploty
+        left_fitx = left_fit[0] * ploty ** 2 + left_fit[1] * ploty + left_fit[2]
+        right_fitx = right_fit[0] * ploty ** 2 + right_fit[1] * ploty + right_fit[2]
+
+        self.LeftLine.recent_xfitted = left_fitx
+        self.RightLine.recent_xfitted = right_fitx
+
+        dtop = np.absolute(left_fitx[0] - right_fitx[0])
+        dbtm = np.absolute(left_fitx[-1] - right_fitx[-1])
+
+        if np.absolute(dtop - self.distTop) > 50:
+            self.LeftLine.current_fit = np.mean(np.array(self.LeftLine.fits))#self.LeftLine.last_fit
+        else:
+            self.distTop = dtop
+            if len(self.LeftLine.fits) < self.LeftLine.N:
+                self.LeftLine.fits.append(self.LeftLine.current_fit)
+            else:
+                self.LeftLine.fits.pop(0)
+                self.LeftLine.fits.append(self.LeftLine.current_fit)
+
+        if np.absolute(dbtm - self.distButtom) > 50:
+            self.RightLine.current_fit = np.mean(np.array(self.RightLine.fits))#self.RightLine.last_fit
+        else:
+            self.distButtom = dbtm
+            if len(self.RightLine.fits) < self.RightLine.N:
+                self.RightLine.fits.append(self.RightLine.current_fit)
+            else:
+                self.RightLine.fits.pop(0)
+                self.RightLine.fits.append(self.RightLine.current_fit)
 
     @profile
     def detect(self, img):
@@ -425,53 +515,10 @@ class Detector():
         binary_warped = self._warp(binary)
 
         if self.InitializedLD:
-            # we know where the lines are in the previous frame
-            nonzero = binary_warped.nonzero()
-            nonzeroy = np.array(nonzero[0])
-            nonzerox = np.array(nonzero[1])
-            margin = self.margin
-
-            left_fit = self.LeftLine.current_fit
-            right_fit = self.RightLine.current_fit
-
-            left_lane_inds = ((nonzerox > (left_fit[0] * (nonzeroy ** 2) + left_fit[1] * nonzeroy +
-                                           left_fit[2] - margin)) & (nonzerox < (left_fit[0] * (nonzeroy ** 2) +
-                                                                                 left_fit[1] * nonzeroy + left_fit[
-                                                                                     2] + margin)))
-
-            right_lane_inds = ((nonzerox > (right_fit[0] * (nonzeroy ** 2) + right_fit[1] * nonzeroy +
-                                            right_fit[2] - margin)) & (nonzerox < (right_fit[0] * (nonzeroy ** 2) +
-                                                                                   right_fit[1] * nonzeroy + right_fit[
-                                                                                       2] + margin)))
-
-            # Again, extract left and right line pixel positions
-            leftx = nonzerox[left_lane_inds]
-            lefty = nonzeroy[left_lane_inds]
-            rightx = nonzerox[right_lane_inds]
-            righty = nonzeroy[right_lane_inds]
-            # Fit a second order polynomial to each
-            left_fit = np.polyfit(lefty, leftx, 2)
-            right_fit = np.polyfit(righty, rightx, 2)
-
-            self.LeftLine.diffs = left_fit - self.LeftLine.current_fit
-            self.LeftLine.current_fit = left_fit
-            self.LeftLine.allx = leftx
-            self.LeftLine.ally = lefty
-
-            self.RightLine.diffs = right_fit - self.RightLine.current_fit
-            self.RightLine.current_fit = right_fit
-            self.RightLine.allx = rightx
-            self.RightLine.ally = righty
-
-            """
-            # Generate x and y values for plotting
-            ploty = self.ploty
-            left_fitx = left_fit[0] * ploty ** 2 + left_fit[1] * ploty + left_fit[2]
-            right_fitx = right_fit[0] * ploty ** 2 + right_fit[1] * ploty + right_fit[2]
-
-            self.LeftLine.recent_xfitted = left_fitx
-            self.RightLine.recent_xfitted = right_fitx
-            """
+            # Detect based on previous detection
+            self.detectCtn(binary_warped)
+            self.LeftLine.detected = True
+            self.RightLine.detected = True
         else:
             # Reset the detection
             self.initDetection(binary_warped)
@@ -545,8 +592,12 @@ class Detector():
         cv2.fillPoly(window_img, np.int_([right_line_pts]), (0, 255, 0))
         result = cv2.addWeighted(out_img, 1, window_img, 0.3, 0)
 
-        result[ploty.astype(np.int32), left_fitx.astype(np.int32) ] = [255, 0, 255]
-        result[ploty.astype(np.int32), right_fitx.astype(np.int32)] = [255, 0, 255]
+        result[ploty.astype(np.int32), left_fitx.astype(np.int32)] = [255, 0, 0]
+        result[ploty.astype(np.int32), left_fitx.astype(np.int32)-1] = [255, 0, 0]
+        result[ploty.astype(np.int32), left_fitx.astype(np.int32)+1] = [255, 0, 0]
+        result[ploty.astype(np.int32), right_fitx.astype(np.int32)] = [255, 0, 0]
+        result[ploty.astype(np.int32), right_fitx.astype(np.int32)-1] = [255, 0, 0]
+        result[ploty.astype(np.int32), right_fitx.astype(np.int32)+1] = [255, 0, 0]
 
         #plt.imshow(result)
         #plt.plot(left_fitx, ploty, color='yellow')
@@ -581,8 +632,8 @@ class Detector():
         result = cv2.addWeighted(self.undist, 1, newwarp, 0.3, 0)
 
         curvts = self.getCurvature()
-        cv2.putText(result, "Radius of curvature = {:4d}".format(math.floor(curvts[0])),
-                    (10, 100), cv2.FONT_HERSHEY_SIMPLEX, 2, 255, thickness=1)
+        cv2.putText(result, "Radius of curvature = {:4d}m".format(math.floor(curvts[0])),
+                    (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, 255, thickness=2)
 
         #plt.imshow(result)
         #plt.show()
@@ -607,6 +658,8 @@ class Detector():
                         np.absolute(2 * left_fit_cr[0])
         right_curverad = ((1 + (2 * right_fit_cr[0] * y_eval * ym_per_pix + right_fit_cr[1]) ** 2) ** 1.5) / \
                          np.absolute(2 * right_fit_cr[0])
+        self.LeftLine.radius_of_curvature = left_curverad
+        self.RightLine.radius_of_curvature =right_curverad
 
         return left_curverad, right_curverad
 
@@ -617,6 +670,8 @@ class Detector():
     def sanityCheck(self):
         self.distTop = 0
         self.distButtom = 0
+
+
         pass
 
     def _calculateCurvature(self, fit):
@@ -719,4 +774,4 @@ def test3():
 
 #test3()
 #test2()
-test()
+#test()

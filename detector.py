@@ -5,6 +5,43 @@ import math
 import matplotlib.pyplot as plt
 import matplotlib.image as mpimg
 
+import time
+from functools import wraps
+
+### define profilers (https://stackoverflow.com/questions/3620943/measuring-elapsed-time-with-the-time-module)
+PROF_DATA = {}
+
+def profile(fn):
+    @wraps(fn)
+    def with_profiling(*args, **kwargs):
+        start_time = time.time()
+
+        ret = fn(*args, **kwargs)
+
+        elapsed_time = time.time() - start_time
+
+        if fn.__name__ not in PROF_DATA:
+            PROF_DATA[fn.__name__] = [0, []]
+        PROF_DATA[fn.__name__][0] += 1
+        PROF_DATA[fn.__name__][1].append(elapsed_time)
+
+        return ret
+
+    return with_profiling
+
+def print_prof_data():
+    for fname, data in PROF_DATA.items():
+        max_time = max(data[1])
+        avg_time = sum(data[1]) / len(data[1])
+        print("Function %s called %d times. " % (fname, data[0]))
+        print('Execution time max: %.3f, average: %.3f' % (max_time, avg_time))
+
+def clear_prof_data():
+    global PROF_DATA
+    PROF_DATA = {}
+
+
+### end of profiler
 
 class Gradient():
     def __init__(self, sobel_kernel=3, sx_thresh=(20,100), s_thresh=(170,255)):
@@ -220,6 +257,7 @@ class Detector():
 
         self.KFLeft = KalmanFilter(3, q=(4e-8, 1e-2, 100), R=(1e-4, 1, 10000))
         self.KFRight = KalmanFilter(3, q=(4e-8, 1e-2, 100), R=(1e-4, 1, 10000))
+        self.UseKalmanFilter = True
 
         # Set lane line detection uninitialized
         self.InitializedLD = False
@@ -236,6 +274,12 @@ class Detector():
         self.FitLeft = []
         self.FitRight = []
 
+    def setMargin(self,margin):
+        self.margin = margin
+
+    def switchKF(self, status):
+        self.UseKalmanFilter = status
+
     def setBinaryFun(self, flag=0):
         """Set the method to generate binary gradient output of a RGB image"""
         if flag==0:
@@ -249,6 +293,7 @@ class Detector():
         else:
             raise 'Invalid flag:'+str(flag)
 
+    @profile
     def performBinary(self, img):
         """Get the binary gradient output of a RGB image"""
 
@@ -347,6 +392,7 @@ class Detector():
         self.RightLine.recent_xfitted = right_fitx
         return out_img
 
+    @profile
     def detect(self, img):
         """Detect lane lines on an image"""
 
@@ -408,8 +454,9 @@ class Detector():
             self.initDetection(binary_warped)
 
         ## Apply Kalman filter here
-        self.LeftLine.current_fit = self.KFLeft.update(self.LeftLine.current_fit)
-        self.RightLine.current_fit = self.KFRight.update(self.RightLine.current_fit)
+        if self.UseKalmanFilter:
+            self.LeftLine.current_fit = self.KFLeft.update(self.LeftLine.current_fit)
+            self.RightLine.current_fit = self.KFRight.update(self.RightLine.current_fit)
 
         self.FitLeft.append(self.LeftLine.current_fit)
         self.FitRight.append(self.RightLine.current_fit)
@@ -463,6 +510,7 @@ class Detector():
         #plt.show()
         return result
 
+    @profile
     def visualizeInput(self):
         """Plot the result on the input RGB image"""
 
@@ -599,7 +647,7 @@ def test():
 
     plt.imshow(tmp)
     plt.show()
-
+    print_prof_data()
     a.plotFit()
 
 def test2():

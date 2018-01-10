@@ -4,6 +4,7 @@ import numpy as np
 import math
 import matplotlib.pyplot as plt
 import matplotlib.image as mpimg
+import scipy.ndimage
 
 import time
 from functools import wraps
@@ -494,7 +495,18 @@ class Detector():
         self.LeftLine.recent_xfitted = left_fitx
         self.RightLine.recent_xfitted = right_fitx
 
-        return self.visualizeInput()
+        output = self.visualizeInput()
+        binOut = self.visualizeDetection(binary_warped)
+
+        height = output.shape[0]
+        width = output.shape[1]
+        scaleDown = 0.4
+        height_s = math.floor(binOut.shape[0]*scaleDown)
+        width_s = math.floor(binOut.shape[1]*scaleDown)
+        binOut = scipy.ndimage.zoom(binOut, (scaleDown,scaleDown,1))
+        output[0:height_s, (width-width_s):width,:] = binOut
+
+        return output#self.visualizeInput()
         #return self.visualizeDetection(binary_warped)
 
     def visualizeDetection(self, img):
@@ -707,4 +719,4 @@ def test3():
 
 #test3()
 #test2()
-#test()
+test()

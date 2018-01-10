@@ -143,6 +143,19 @@ class SXGrad(Gradient):
         return combined_binary
 
 
+class SChannelGrad(Gradient):
+
+    def preprocess(self, img):
+        # Get HLS color image
+        hls = cv2.cvtColor(img, cv2.COLOR_RGB2HLS).astype(np.float)
+        # Get s-channel
+        s_channel = hls[:, :, 2]
+
+        s_binary = np.zeros_like(s_channel)
+        s_binary[(s_channel >= self.s_thresh[0]) & (s_channel <= self.s_thresh[1])] = 1
+
+        return s_binary
+
 # Define a class to receive the characteristics of each line detection
 class Line():
     def __init__(self):
@@ -263,6 +276,8 @@ class Detector():
         self.InitializedLD = False
 
         self.ploty = None
+        self.distTop = 0
+        self.distButtom = 0
         self.img = None
         self.undist = None
 
@@ -290,6 +305,8 @@ class Detector():
             self.Gradient = DirGrad()
         elif flag==3:
             self.Gradient = SXGrad()
+        elif flag==4:
+            self.Gradient = SChannelGrad()
         else:
             raise 'Invalid flag:'+str(flag)
 
@@ -382,6 +399,9 @@ class Detector():
         self.RightLine.allx = rightx
         self.RightLine.ally = righty
 
+        ploty = np.linspace(0, binary_warped.shape[0] - 1, binary_warped.shape[0])
+        self.ploty = ploty
+        """
         # Generate x and y values for plotting
         ploty = np.linspace(0, binary_warped.shape[0] - 1, binary_warped.shape[0])
         left_fitx = left_fit[0] * ploty ** 2 + left_fit[1] * ploty + left_fit[2]
@@ -390,6 +410,7 @@ class Detector():
         self.ploty = ploty
         self.LeftLine.recent_xfitted = left_fitx
         self.RightLine.recent_xfitted = right_fitx
+        """
         return out_img
 
     @profile
@@ -441,6 +462,7 @@ class Detector():
             self.RightLine.allx = rightx
             self.RightLine.ally = righty
 
+            """
             # Generate x and y values for plotting
             ploty = self.ploty
             left_fitx = left_fit[0] * ploty ** 2 + left_fit[1] * ploty + left_fit[2]
@@ -448,7 +470,7 @@ class Detector():
 
             self.LeftLine.recent_xfitted = left_fitx
             self.RightLine.recent_xfitted = right_fitx
-
+            """
         else:
             # Reset the detection
             self.initDetection(binary_warped)
@@ -460,6 +482,18 @@ class Detector():
 
         self.FitLeft.append(self.LeftLine.current_fit)
         self.FitRight.append(self.RightLine.current_fit)
+
+        # Generate x and y values for plotting
+        ploty = self.ploty
+        left_fit = self.LeftLine.current_fit
+        right_fit = self.RightLine.current_fit
+
+        left_fitx = left_fit[0] * ploty ** 2 + left_fit[1] * ploty + left_fit[2]
+        right_fitx = right_fit[0] * ploty ** 2 + right_fit[1] * ploty + right_fit[2]
+
+        self.LeftLine.recent_xfitted = left_fitx
+        self.RightLine.recent_xfitted = right_fitx
+
         return self.visualizeInput()
         #return self.visualizeDetection(binary_warped)
 
@@ -554,16 +588,24 @@ class Detector():
 
         left_fit_cr = np.polyfit(ploty * ym_per_pix, leftx * xm_per_pix, 2)
         right_fit_cr = np.polyfit(ploty * ym_per_pix, rightx * xm_per_pix, 2)
+
+
         # Calculate the new radii of curvature
         left_curverad = ((1 + (2 * left_fit_cr[0] * y_eval * ym_per_pix + left_fit_cr[1]) ** 2) ** 1.5) / \
                         np.absolute(2 * left_fit_cr[0])
         right_curverad = ((1 + (2 * right_fit_cr[0] * y_eval * ym_per_pix + right_fit_cr[1]) ** 2) ** 1.5) / \
                          np.absolute(2 * right_fit_cr[0])
+
         return left_curverad, right_curverad
 
     def distance(self):
         print("The distance of two lines is .")
         return 1.0
+
+    def sanityCheck(self):
+        self.distTop = 0
+        self.distButtom = 0
+        pass
 
     def _calculateCurvature(self, fit):
         pass
@@ -636,13 +678,16 @@ def test():
     Minv = dist_pickle["Minv"]
 
     a = Detector(mtx=mtx, dist=dist, M=M, Minv=Minv)
+    a.setBinaryFun(flag=4)
     a.distance()
     a.LeftLine.test()
 
     img = mpimg.imread('test_images/straight_lines1.jpg')
     tmp = a.detect(img)
+    plt.imshow(tmp)
+    plt.show()
 
-    img = mpimg.imread('test_images/straight_lines1.jpg')
+    img = mpimg.imread('test_images/straight_lines2.jpg')
     tmp = a.detect(img)
 
     plt.imshow(tmp)

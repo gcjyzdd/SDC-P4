@@ -516,7 +516,7 @@ class Detector():
         dmax = np.max(np.absolute(left_fitx - right_fitx))
         dmin = np.min(np.absolute(left_fitx - right_fitx))
 
-        if (dmax-dmin)/dmin > 0.15:
+        if (dmax-dmin)/dmin > 0.15:# Not parallel
             # Reset detection
             self.InitializedLD = False
 
@@ -549,6 +549,10 @@ class Detector():
             else:
                 self.RightLine.fits.pop(0)
                 self.RightLine.fits.append(self.RightLine.current_fit)
+
+        # Smooth the result
+        self.LeftLine.current_fit = np.mean(np.array(self.LeftLine.fits), axis=0)#self.LeftLine.last_fit
+        self.RightLine.current_fit = np.mean(np.array(self.RightLine.fits), axis=0)  # self.RightLine.last_fit
 
         self.LeftLine.diffs = left_fit - self.LeftLine.current_fit
         # self.LeftLine.current_fit = left_fit
@@ -896,5 +900,5 @@ def testKF():
 
 #test3()
 #test2()
-test()
+#test()
 #testKF()

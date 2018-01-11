@@ -462,47 +462,53 @@ class Detector():
         left_fit = np.polyfit(lefty, leftx, 2)
         right_fit = np.polyfit(righty, rightx, 2)
 
-        self.LeftLine.diffs = left_fit - self.LeftLine.current_fit
-        self.LeftLine.current_fit = left_fit
-        self.LeftLine.allx = leftx
-        self.LeftLine.ally = lefty
-
-        self.RightLine.diffs = right_fit - self.RightLine.current_fit
-        self.RightLine.current_fit = right_fit
-        self.RightLine.allx = rightx
-        self.RightLine.ally = righty
-
-
         # Generate x and y values for plotting
         ploty = self.ploty
         left_fitx = left_fit[0] * ploty ** 2 + left_fit[1] * ploty + left_fit[2]
         right_fitx = right_fit[0] * ploty ** 2 + right_fit[1] * ploty + right_fit[2]
 
-        self.LeftLine.recent_xfitted = left_fitx
-        self.RightLine.recent_xfitted = right_fitx
+        dmax = np.max(np.absolute(left_fitx - right_fitx))
+        dmin = np.min(np.absolute(left_fitx - right_fitx))
 
-        dtop = np.absolute(left_fitx[0] - right_fitx[0])
-        dbtm = np.absolute(left_fitx[-1] - right_fitx[-1])
-
-        if np.absolute(dtop - self.distTop) > 50:
+        if dmax > 800 or dmin < 500:
             self.LeftLine.current_fit = np.mean(np.array(self.LeftLine.fits))#self.LeftLine.last_fit
+            self.RightLine.current_fit = np.mean(np.array(self.RightLine.fits))  # self.RightLine.last_fit
         else:
-            self.distTop = dtop
+            # Detection is true and update states
+            if np.max(np.absolute(left_fitx - self.LeftLine.recent_xfitted))>70:
+                self.LeftLine.current_fit = np.mean(np.array(self.LeftLine.fits))  # self.LeftLine.last_fit
+            else:
+                self.LeftLine.current_fit = left_fit
+                self.LeftLine.recent_xfitted = left_fitx
+
+            if np.max(np.absolute(right_fitx - self.RightLine.recent_xfitted))>70:
+                self.RightLine.current_fit = np.mean(np.array(self.RightLine.fits))  # self.RightLine.last_fit
+            else:
+                self.RightLine.current_fit = right_fit
+                self.RightLine.recent_xfitted = right_fitx
+
+            # Pushback states
             if len(self.LeftLine.fits) < self.LeftLine.N:
                 self.LeftLine.fits.append(self.LeftLine.current_fit)
             else:
                 self.LeftLine.fits.pop(0)
                 self.LeftLine.fits.append(self.LeftLine.current_fit)
 
-        if np.absolute(dbtm - self.distButtom) > 50:
-            self.RightLine.current_fit = np.mean(np.array(self.RightLine.fits))#self.RightLine.last_fit
-        else:
-            self.distButtom = dbtm
             if len(self.RightLine.fits) < self.RightLine.N:
                 self.RightLine.fits.append(self.RightLine.current_fit)
             else:
                 self.RightLine.fits.pop(0)
                 self.RightLine.fits.append(self.RightLine.current_fit)
+
+        self.LeftLine.diffs = left_fit - self.LeftLine.current_fit
+        # self.LeftLine.current_fit = left_fit
+        self.LeftLine.allx = leftx
+        self.LeftLine.ally = lefty
+
+        self.RightLine.diffs = right_fit - self.RightLine.current_fit
+        # self.RightLine.current_fit = right_fit
+        self.RightLine.allx = rightx
+        self.RightLine.ally = righty
 
     @profile
     def detect(self, img):
@@ -545,7 +551,7 @@ class Detector():
         output = self.visualizeInput()
         binOut = self.visualizeDetection(binary_warped)
 
-        height = output.shape[0]
+        # height = output.shape[0]
         width = output.shape[1]
         scaleDown = 0.4
         height_s = math.floor(binOut.shape[0]*scaleDown)

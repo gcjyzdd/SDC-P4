@@ -599,12 +599,12 @@ class Detector():
         result[ploty.astype(np.int32), right_fitx.astype(np.int32)-1] = [255, 0, 0]
         result[ploty.astype(np.int32), right_fitx.astype(np.int32)+1] = [255, 0, 0]
 
-        #plt.imshow(result)
-        #plt.plot(left_fitx, ploty, color='yellow')
-        #plt.plot(right_fitx, ploty, color='yellow')
-        #plt.xlim(0, 1280)
-        #plt.ylim(720, 0)
-        #plt.show()
+        # plt.imshow(result)
+        # plt.plot(left_fitx, ploty, color='yellow')
+        # plt.plot(right_fitx, ploty, color='yellow')
+        # plt.xlim(0, 1280)
+        # plt.ylim(720, 0)
+        # plt.show()
         return result
 
     @profile

@@ -100,3 +100,8 @@ ENV/
 # mypy
 .mypy_cache/
 .idea
+
+# image folder
+challenge_frames
+frames
+hc_frames

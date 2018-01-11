@@ -6,6 +6,8 @@ import matplotlib.pyplot as plt
 import matplotlib.image as mpimg
 import scipy.ndimage
 
+from multiprocessing.pool import ThreadPool
+
 import time
 from functools import wraps
 
@@ -361,6 +363,8 @@ class Detector():
             self.Gradient = SXGrad()
         elif flag==4:
             self.Gradient = SChannelGrad()
+        elif flag==5:
+            self.Gradient = LightAutoGrad()
         else:
             raise 'Invalid flag:'+str(flag)
 
@@ -470,6 +474,7 @@ class Detector():
         self.distButtom = np.absolute(left_fitx[-1] - right_fitx[0])
         return out_img
 
+    @profile
     def detectCtn(self, binary_warped):
         """Continuous detection, based on previous detection"""
         # Update last fit
@@ -511,19 +516,23 @@ class Detector():
         dmax = np.max(np.absolute(left_fitx - right_fitx))
         dmin = np.min(np.absolute(left_fitx - right_fitx))
 
+        if (dmax-dmin)/dmin > 0.15:
+            # Reset detection
+            self.InitializedLD = False
+
         if dmax > 800 or dmin < 500:
-            self.LeftLine.current_fit = np.mean(np.array(self.LeftLine.fits))#self.LeftLine.last_fit
-            self.RightLine.current_fit = np.mean(np.array(self.RightLine.fits))  # self.RightLine.last_fit
+            self.LeftLine.current_fit = np.mean(np.array(self.LeftLine.fits), axis=0)#self.LeftLine.last_fit
+            self.RightLine.current_fit = np.mean(np.array(self.RightLine.fits), axis=0)  # self.RightLine.last_fit
         else:
             # Detection is true and update states
             if np.max(np.absolute(left_fitx - self.LeftLine.recent_xfitted))>70:
-                self.LeftLine.current_fit = np.mean(np.array(self.LeftLine.fits))  # self.LeftLine.last_fit
+                self.LeftLine.current_fit = np.mean(np.array(self.LeftLine.fits), axis=0)  # self.LeftLine.last_fit
             else:
                 self.LeftLine.current_fit = left_fit
                 self.LeftLine.recent_xfitted = left_fitx
 
             if np.max(np.absolute(right_fitx - self.RightLine.recent_xfitted))>70:
-                self.RightLine.current_fit = np.mean(np.array(self.RightLine.fits))  # self.RightLine.last_fit
+                self.RightLine.current_fit = np.mean(np.array(self.RightLine.fits), axis=0)  # self.RightLine.last_fit
             else:
                 self.RightLine.current_fit = right_fit
                 self.RightLine.recent_xfitted = right_fitx
@@ -597,6 +606,12 @@ class Detector():
 
         self.LeftLine.recent_xfitted = left_fitx
         self.RightLine.recent_xfitted = right_fitx
+
+        #async_result = self.pool.apply_async(self.visualizeDetection, (binary_warped, ))  # tuple of args for foo
+
+        # do some other stuff in the main process
+        #output = self.visualizeInput()
+        #binOut = async_result.get()
 
         output = self.visualizeInput()
         binOut = self.visualizeDetection(binary_warped)
@@ -697,6 +712,7 @@ class Detector():
         #plt.show()
         return result.astype(np.uint8)
 
+    @profile
     def getCurvature(self):
         """Calculate curvature of two lines"""
         # Fit new polynomials to x,y in world space
@@ -739,14 +755,16 @@ class Detector():
         self.KFLeft.setPR(P, R)
         self.KFRight.setPR(P,R)
 
-    def _gaussian_blur(img, kernel_size=5):
+    def _gaussian_blur(self, img, kernel_size=5):
         """Applies a Gaussian Noise kernel"""
         return cv2.GaussianBlur(img, (kernel_size, kernel_size), 0)
 
+    @profile
     def _undistort(self, img):
         """Apply image undistortion"""
         return cv2.undistort(img, self.CameraMatrix, self.Distortion, None, self.CameraMatrix)
 
+    @profile
     def _warp(self, img):
         """Apply image warp transformation"""
         return cv2.warpPerspective(img, self.WarpMatrix, (img.shape[1], img.shape[0]))
@@ -754,6 +772,10 @@ class Detector():
     def _invwarp(self, img):
         """Apply image inverse warp transformation"""
         return cv2.warpPerspective(img, self.WarpMatrixInv, (img.shape[1], img.shape[0]))
+
+    @profile
+    def _zoomImg(self, img, scale):
+        return scipy.ndimage.zoom(img, scale)
 
     def plotFit(self):
         self._plotFit(self.FitLeft)
@@ -806,19 +828,25 @@ def test():
     a.setBinaryFun(flag=4)
     a.distance()
     a.LeftLine.test()
+    a.debug = True
 
-    img = mpimg.imread('test_images/straight_lines1.jpg')
+    #img = mpimg.imread('test_images/straight_lines1.jpg')
+    #img = mpimg.imread('./frames/1043.jpg')
+    img = mpimg.imread('./challenge_frames/0468.jpg')
+    #img = img.astype(np.uint8)
+
     tmp = a.detect(img)
     plt.imshow(tmp)
     plt.show()
 
-    img = mpimg.imread('test_images/straight_lines2.jpg')
+    img = mpimg.imread('./frames/0557.jpg')
+    #img = mpimg.imread('test_images/straight_lines2.jpg')
     tmp = a.detect(img)
 
     plt.imshow(tmp)
     plt.show()
     print_prof_data()
-    a.plotFit()
+    #a.plotFit()
 
 def test2():
     kf = KalmanFilter(3)
@@ -830,6 +858,43 @@ def test2():
 def test3():
     print('rt ', np.eye(3))
 
+def testKF():
+    import pickle
+    import matplotlib.pyplot as plt
+    import matplotlib.image as mpimg
+    from detector import Detector, print_prof_data
+
+
+    dist_pickle = pickle.load(open("camera_cal/wide_dist_pickle.p", "rb"))
+    mtx = dist_pickle["mtx"]
+    dist = dist_pickle["dist"]
+    M = dist_pickle["M"]
+    Minv = dist_pickle["Minv"]
+
+    detector = Detector(mtx=mtx, dist=dist, M=M, Minv=Minv, sx_thresh=(20, 100), s_thresh=(170, 255))
+    q = [4, 4, 4]
+    R = [1, 1, 1]
+    detector.setKF_PR(q, R)
+    detector.setMargin(60)
+    detector.setBinaryFun(flag=3)
+    detector.switchKF(False)
+
+
+    # Import everything needed to edit/save/watch video clips
+    from moviepy.editor import VideoFileClip
+    from IPython.display import HTML
+
+    white_output = 'output_images/project_output_v2_kf_tmp.mp4'
+    ## To speed up the testing process you may want to try your pipeline on a shorter subclip of the video
+    ## To do so add .subclip(start_second,end_second) to the end of the line below
+    ## Where start_second and end_second are integer values representing the start and end of the subclip
+    ## You may also uncomment the following line for a subclip of the first 5 seconds
+    ##clip1 = VideoFileClip("./project_video.mp4").subclip(20,45)
+    clip1 = VideoFileClip("./project_video.mp4").subclip(0,1)
+    white_clip = clip1.fl_image(detector.detect) #NOTE: this function expects color images!!
+    white_clip.write_videofile(white_output, audio=False)
+
 #test3()
 #test2()
-#test()
+test()
+#testKF()

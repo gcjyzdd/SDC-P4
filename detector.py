@@ -157,6 +157,44 @@ class SChannelGrad(Gradient):
 
         return s_binary
 
+
+class LightAutoGrad(Gradient):
+
+    def preprocess(self, img):
+        # grayscale image
+        gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+
+        mean_gray = np.mean(gray)
+
+        # sobel operation applied to x axis
+        sobelx = cv2.Sobel(gray, cv2.CV_64F, 1, 0)
+        # Get absolute values
+        abs_sobelx = np.absolute(sobelx)
+        # Scale to (0, 255)
+        scaled_sobel = np.uint8(255 * abs_sobelx / np.max(abs_sobelx))
+
+        sxbinary = np.zeros_like(scaled_sobel)
+        sxbinary[(scaled_sobel >= self.sx_thresh[0]) & (scaled_sobel <= self.sx_thresh[1])] = 1
+
+        # Get HLS color image
+        hls = cv2.cvtColor(img, cv2.COLOR_RGB2HLS).astype(np.float)
+
+        if mean_gray > 80:
+            # Get s-channel
+            s_channel = hls[:, :, 2]
+        else:# Dark emvironment
+            # Get l-channel
+            s_channel = hls[:, :, 1]
+
+        s_binary = np.zeros_like(s_channel)
+        s_binary[(s_channel >= self.s_thresh[0]) & (s_channel <= self.s_thresh[1])] = 1
+
+        # Combine grayscale and color gradient
+        combined_binary = np.zeros_like(sxbinary)
+        combined_binary[(s_binary == 1) | (sxbinary == 1)] = 1
+
+        return combined_binary
+
 # Define a class to receive the characteristics of each line detection
 class Line():
     def __init__(self):
@@ -301,6 +339,9 @@ class Detector():
 
         self.FitLeft = []
         self.FitRight = []
+
+        self.debug = False
+        #self.pool = ThreadPool(processes=1)
 
     def setMargin(self,margin):
         self.margin = margin
@@ -517,8 +558,17 @@ class Detector():
         self.img = img
         # preprocessing img
         self.undist = self._undistort(img)
-        binary = self.performBinary(self.undist)
-        binary_warped = self._warp(binary)
+        #binary = self.performBinary(self.undist)
+        #binary_warped = self._warp(binary)
+
+        warped = self._warp(self.undist)
+
+        if self.debug:
+            db_gray = cv2.cvtColor(warped, cv2.COLOR_RGB2GRAY)
+            print('Mean gray = ', np.mean(db_gray))
+
+        binary_warped = self.performBinary(warped)
+        binary_warped = self._gaussian_blur(binary_warped)
 
         if self.InitializedLD:
             # Detect based on previous detection
@@ -556,12 +606,14 @@ class Detector():
         scaleDown = 0.4
         height_s = math.floor(binOut.shape[0]*scaleDown)
         width_s = math.floor(binOut.shape[1]*scaleDown)
-        binOut = scipy.ndimage.zoom(binOut, (scaleDown,scaleDown,1))
+        #binOut = self._zoomImg(binOut, (scaleDown,scaleDown,1))# extremely slow
+        binOut = cv2.resize(binOut, (width_s, height_s))
         output[0:height_s, (width-width_s):width,:] = binOut
 
         return output#self.visualizeInput()
         #return self.visualizeDetection(binary_warped)
 
+    @profile
     def visualizeDetection(self, img):
         """Plot the detection result on the warped binary image"""
         # Create an image to draw on and an image to show the selection window

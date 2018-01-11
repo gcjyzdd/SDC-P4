@@ -31,7 +31,7 @@ return -1;
     char path[100];
     while(cap.read(img))
     {
-        sprintf(path,"%s/%04d.png",fname,ind);
+        sprintf(path,"%s/%04d.jpg",fname,ind);
 	printf("%s\n",path);
         imwrite(path,img);
         ind++;

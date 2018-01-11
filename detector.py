@@ -206,7 +206,7 @@ class Line():
         self.N = 5
         # x values of the last n fits of the line
         self.recent_xfitted = []
-        #average x values of the fitted line over the last n iterations
+        # average x values of the fitted line over the last n iterations
         self.bestx = None
         # polynomial coefficients of the last n iterations
         self.fits = []
@@ -214,18 +214,21 @@ class Line():
         self.best_fit = None
         # save polynomial coeffs of last iteration
         self.last_fit = None
-        #polynomial coefficients for the most recent fit
+        # polynomial coefficients for the most recent fit
         self.current_fit = [np.array([False])]
-        #radius of curvature of the line in some units
+        # radius of curvature of the line in some units
         self.radius_of_curvature = None
-        #distance in meters of vehicle center from the line
+        # distance in meters of vehicle center from the line
         self.line_base_pos = None
-        #difference in fit coefficients between last and new fits
+        # difference in fit coefficients between last and new fits
         self.diffs = np.array([0,0,0], dtype='float')
-        #x values for detected line pixels
+        # x values for detected line pixels
         self.allx = None
-        #y values for detected line pixels
+        # y values for detected line pixels
         self.ally = None
+
+        self.MaxFail = 5
+        self.fail_num = 0
 
     def setNum(self, n):
         self.N = n
@@ -330,6 +333,7 @@ class Detector():
 
         self.ploty = None
         self.distTop = 0
+        self.dist_to_left = 0
         self.distButtom = 0
         self.img = None
         self.undist = None
@@ -343,13 +347,17 @@ class Detector():
         self.FitRight = []
 
         self.debug = False
-        #self.pool = ThreadPool(processes=1)
+        # self.pool = ThreadPool(processes=1)
 
     def setMargin(self,margin):
         self.margin = margin
 
     def switchKF(self, status):
         self.UseKalmanFilter = status
+
+    def setMaxFail(self, mf):
+        self.LeftLine.MaxFail = mf
+        self.RightLine.MaxFail = mf
 
     def setBinaryFun(self, flag=0):
         """Set the method to generate binary gradient output of a RGB image"""
@@ -472,6 +480,20 @@ class Detector():
 
         self.distTop = np.absolute(left_fitx[0] - right_fitx[0])
         self.distButtom = np.absolute(left_fitx[-1] - right_fitx[0])
+
+        # Pushback states
+        if len(self.LeftLine.fits) < self.LeftLine.N:
+            self.LeftLine.fits.append(self.LeftLine.current_fit)
+        else:
+            self.LeftLine.fits.pop(0)
+            self.LeftLine.fits.append(self.LeftLine.current_fit)
+
+        if len(self.RightLine.fits) < self.RightLine.N:
+            self.RightLine.fits.append(self.RightLine.current_fit)
+        else:
+            self.RightLine.fits.pop(0)
+            self.RightLine.fits.append(self.RightLine.current_fit)
+
         return out_img
 
     @profile
@@ -516,13 +538,19 @@ class Detector():
         dmax = np.max(np.absolute(left_fitx - right_fitx))
         dmin = np.min(np.absolute(left_fitx - right_fitx))
 
-        if (dmax-dmin)/dmin > 0.15:# Not parallel
+        if (dmax-dmin)/dmin > 0.4:# Not parallel
             # Reset detection
-            self.InitializedLD = False
+            if self.LeftLine.fail_num > 0:
+                self.LeftLine.fail_num += 1
+                if self.LeftLine.fail_num == self.LeftLine.MaxFail:
+                    self.InitializedLD = False
+        else:
+            # reset failure number to zero
+            self.LeftLine.fail_num = 0
 
-        if dmax > 800 or dmin < 500:
-            self.LeftLine.current_fit = np.mean(np.array(self.LeftLine.fits), axis=0)#self.LeftLine.last_fit
-            self.RightLine.current_fit = np.mean(np.array(self.RightLine.fits), axis=0)  # self.RightLine.last_fit
+        if dmax > 900 or dmin < 500:
+            self.LeftLine.current_fit = np.mean(np.array(self.LeftLine.fits), axis=0)
+            self.RightLine.current_fit = np.mean(np.array(self.RightLine.fits), axis=0)
         else:
             # Detection is true and update states
             if np.max(np.absolute(left_fitx - self.LeftLine.recent_xfitted))>70:
@@ -586,11 +614,11 @@ class Detector():
         if self.InitializedLD:
             # Detect based on previous detection
             self.detectCtn(binary_warped)
-            self.LeftLine.detected = True
-            self.RightLine.detected = True
         else:
             # Reset the detection
             self.initDetection(binary_warped)
+            self.LeftLine.detected = True
+            self.RightLine.detected = True
 
         ## Apply Kalman filter here
         if self.UseKalmanFilter:
@@ -704,14 +732,15 @@ class Detector():
         cv2.fillPoly(color_warp, np.int_([pts]), (0, 255, 0))
 
         # Warp the blank back to original image space using inverse perspective matrix (Minv)
-        newwarp = self._invwarp(color_warp)#cv2.warpPerspective(color_warp, self.WarpMatrixInv, (img.shape[1], img.shape[0]))
+        newwarp = self._invwarp(color_warp)
         # Combine the result with the original image
         result = cv2.addWeighted(self.undist, 1, newwarp, 0.3, 0)
 
         curvts = self.getCurvature()
         cv2.putText(result, "Radius of curvature = {:4d}m".format(math.floor(curvts[0])),
                     (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, 255, thickness=2)
-
+        cv2.putText(result, "Distance to left line = {:3.2f}m".format(self.dist_to_left),
+                    (10, 80), cv2.FONT_HERSHEY_SIMPLEX, 1, 255, thickness=2)
         #plt.imshow(result)
         #plt.show()
         return result.astype(np.uint8)
@@ -738,7 +767,7 @@ class Detector():
                          np.absolute(2 * right_fit_cr[0])
         self.LeftLine.radius_of_curvature = left_curverad
         self.RightLine.radius_of_curvature =right_curverad
-
+        self.dist_to_left = xm_per_pix * (self.img.shape[1]/2 - self.LeftLine.recent_xfitted[-1])
         return left_curverad, right_curverad
 
     def distance(self):
@@ -866,8 +895,6 @@ def testKF():
     import pickle
     import matplotlib.pyplot as plt
     import matplotlib.image as mpimg
-    from detector import Detector, print_prof_data
-
 
     dist_pickle = pickle.load(open("camera_cal/wide_dist_pickle.p", "rb"))
     mtx = dist_pickle["mtx"]
@@ -880,7 +907,7 @@ def testKF():
     R = [1, 1, 1]
     detector.setKF_PR(q, R)
     detector.setMargin(60)
-    detector.setBinaryFun(flag=3)
+    detector.setBinaryFun(flag=5)
     detector.switchKF(False)
 
 
@@ -894,7 +921,10 @@ def testKF():
     ## Where start_second and end_second are integer values representing the start and end of the subclip
     ## You may also uncomment the following line for a subclip of the first 5 seconds
     ##clip1 = VideoFileClip("./project_video.mp4").subclip(20,45)
-    clip1 = VideoFileClip("./project_video.mp4").subclip(0,1)
+    # clip1 = VideoFileClip("./project_video.mp4").subclip(0,1)
+    clip1 = VideoFileClip("./challenge_video.mp4")  # .subclip(18,48)
+    white_output = 'output_images/challenge_output_1.mp4'
+
     white_clip = clip1.fl_image(detector.detect) #NOTE: this function expects color images!!
     white_clip.write_videofile(white_output, audio=False)
 

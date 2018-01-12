@@ -120,7 +120,7 @@ class SXGrad(Gradient):
     """Calculate S-Channel and X directional sobel gradient"""
     def preprocess(self, img):
         # grayscale image
-        gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+        gray = cv2.cvtColor(img, cv2.COLdetectorOR_RGB2GRAY)
         # sobel operation applied to x axis
         sobelx = cv2.Sobel(gray, cv2.CV_64F, 1, 0)
         # Get absolute values
@@ -426,10 +426,13 @@ class Detector():
         self.FitRight = []
 
         self.debug = False
+        self.CurvtRatio = 0
         # self.pool = ThreadPool(processes=1)
 
     def setMargin(self,margin):
         self.margin = margin
+        self.LeftLine.margin = margin
+        self.RightLine.margin =margin
 
     def switchKF(self, status):
         self.UseKalmanFilter = status
@@ -461,6 +464,7 @@ class Detector():
 
         return self.Gradient.preprocess(img)
 
+    @profile
     def get_xy_pvalue(self, binary_warped):
         """Get the xy pixel values for fitting"""
         if self.LeftLine.detected:
@@ -562,13 +566,16 @@ class Detector():
         cv2.fillPoly(window_img, np.int_([right_line_pts]), (0, 255, 0))
         result = cv2.addWeighted(out_img, 1, window_img, 0.3, 0)
 
-        result[ploty.astype(np.int32), left_fitx.astype(np.int32)] = [255, 0, 0]
-        result[ploty.astype(np.int32), left_fitx.astype(np.int32)-1] = [255, 0, 0]
-        result[ploty.astype(np.int32), left_fitx.astype(np.int32)+1] = [255, 0, 0]
-        result[ploty.astype(np.int32), right_fitx.astype(np.int32)] = [255, 0, 0]
-        result[ploty.astype(np.int32), right_fitx.astype(np.int32)-1] = [255, 0, 0]
-        result[ploty.astype(np.int32), right_fitx.astype(np.int32)+1] = [255, 0, 0]
+        width = img.shape[1]
+        result[ploty.astype(np.int32), left_fitx.astype(np.int32) % width] = [255, 0, 0]
+        result[ploty.astype(np.int32), (left_fitx.astype(np.int32)-1) % width ] = [255, 0, 0]
+        result[ploty.astype(np.int32), (left_fitx.astype(np.int32)+1) % width] = [255, 0, 0]
+        result[ploty.astype(np.int32), right_fitx.astype(np.int32) % width] = [255, 0, 0]
+        result[ploty.astype(np.int32), (right_fitx.astype(np.int32)-1) % width] = [255, 0, 0]
+        result[ploty.astype(np.int32), (right_fitx.astype(np.int32)+1) % width] = [255, 0, 0]
 
+        result[self.LeftLine.ally, self.LeftLine.allx] = [0, 0, 255]
+        result[self.RightLine.ally, self.RightLine.allx] = [0, 0, 255]
         if self.debug:
             plt.imshow(result)
             plt.plot(left_fitx, ploty, color='yellow')
@@ -604,9 +611,14 @@ class Detector():
         result = cv2.addWeighted(self.undist, 1, newwarp, 0.3, 0)
 
         cv2.putText(result, "Radius of curvature = {:4d}m".format(math.floor(self.LeftLine.radius_of_curvature)),
-                    (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, 255, thickness=2)
+                    (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, 255, thickness=2)
         cv2.putText(result, "Distance to left line = {:3.2f}m".format(self.dist_to_left),
-                    (10, 80), cv2.FONT_HERSHEY_SIMPLEX, 1, 255, thickness=2)
+                    (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 1, 255, thickness=2)
+        cv2.putText(result, "CvtRatio = {:3.2f}".format(self.CurvtRatio),
+                    (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 1, 255, thickness=2)
+        cv2.putText(result, "Failed {:d} times".format(self.LeftLine.fail_num), (10, 120), cv2.FONT_HERSHEY_SIMPLEX, 1, 255, thickness=2)
+        if not self.InitializedLD:
+            cv2.putText(result, "Reset detection", (10, 150), cv2.FONT_HERSHEY_SIMPLEX, 1, 255, thickness=2)
 
         return result.astype(np.uint8)
 
@@ -652,6 +664,7 @@ class Detector():
         curvts = self.getCurvature(left_fit, right_fit)
         curvts = np.absolute(curvts)
         ratio = np.max(curvts)/np.min(curvts)
+        self.CurvtRatio = ratio
 
         ploty = self.ploty
         left_fitx = left_fit[0] * ploty ** 2 + left_fit[1] * ploty + left_fit[2]
@@ -660,8 +673,34 @@ class Detector():
         dmax = np.max(np.absolute(left_fitx - right_fitx))
         dmin = np.min(np.absolute(left_fitx - right_fitx))
 
-        if ratio > 5 or (dmax-dmin)/dmin > 0.3:
+        self.LeftLine.current_fit = left_fit
+        self.RightLine.current_fit = right_fit
+        a1 = 0.8
+        a2 = 1 - a1
+        if ratio > 5 or (dmax > 900 or dmin < 400):  # or (dmax-dmin)/dmin > 0.5
             self.LeftLine.fail_num += 1
+
+            # Smooth the result
+            N = self.LeftLine.N
+
+            self.LeftLine.current_fit = a1 * self.LeftLine.current_fit + a2 * np.mean(np.array(self.LeftLine.fits),
+                                                                                      axis=0)
+            self.RightLine.current_fit = a1 * self.RightLine.current_fit + a2 * np.mean(np.array(self.RightLine.fits),
+                                                                                        axis=0)
+
+            # Pushback states
+            if len(self.LeftLine.fits) < self.LeftLine.N:
+                self.LeftLine.fits.append(self.LeftLine.current_fit*0.7)
+            else:
+                self.LeftLine.fits.pop(0)
+                self.LeftLine.fits.append(self.LeftLine.current_fit*0.7)
+
+            if len(self.RightLine.fits) < self.RightLine.N:
+                self.RightLine.fits.append(self.RightLine.current_fit*0.7)
+            else:
+                self.RightLine.fits.pop(0)
+                self.RightLine.fits.append(self.RightLine.current_fit*0.7)
+
             if self.LeftLine.fail_num == self.LeftLine.MaxFail:
                 # reset detection if fails MaxFail times in a row
                 self.InitializedLD = False
@@ -674,8 +713,21 @@ class Detector():
 
             self.LeftLine.fail_num = 0
 
-            self.LeftLine.current_fit = left_fit
-            self.RightLine.current_fit = right_fit
+            if len(self.LeftLine.recent_xfitted)>0:
+                if np.max(np.absolute(left_fitx - self.LeftLine.recent_xfitted[-1]))>70:
+                    self.LeftLine.current_fit = a1 * self.LeftLine.current_fit + \
+                                                a2 * np.mean(np.array(self.LeftLine.fits), axis=0)
+                else:
+                    self.LeftLine.current_fit = left_fit
+                    self.LeftLine.recent_xfitted.append(left_fitx)
+
+            if len(self.RightLine.recent_xfitted)>0:
+                if np.max(np.absolute(right_fitx - self.RightLine.recent_xfitted[-1]))>70:
+                    self.RightLine.current_fit = a1 * self.RightLine.current_fit + \
+                                                 a2 * np.mean(np.array(self.RightLine.fits), axis=0)
+                else:
+                    self.RightLine.current_fit = right_fit
+                    self.RightLine.recent_xfitted.append(right_fitx)
 
             # Pushback states
             if len(self.LeftLine.fits) < self.LeftLine.N:
@@ -690,26 +742,33 @@ class Detector():
                 self.RightLine.fits.pop(0)
                 self.RightLine.fits.append(self.RightLine.current_fit)
 
-            if len(self.LeftLine.recent_xfitted) < self.LeftLine.N:
-                self.LeftLine.recent_xfitted.append(left_fitx)
-            else:
-                self.LeftLine.recent_xfitted.pop(0)
-                self.LeftLine.recent_xfitted.append(left_fitx)
-
-            if len(self.RightLine.recent_xfitted) < self.RightLine.N:
-                self.RightLine.recent_xfitted.append(right_fitx)
-            else:
-                self.RightLine.recent_xfitted.pop(0)
-                self.RightLine.recent_xfitted.append(right_fitx)
-
     def update(self):
-        # Smooth the result
-        self.LeftLine.current_fit = np.mean(np.array(self.LeftLine.fits), axis=0)#self.LeftLine.last_fit
-        self.RightLine.current_fit = np.mean(np.array(self.RightLine.fits), axis=0)  # self.RightLine.last_fit
+        self.FitLeft.append(self.LeftLine.current_fit)
+        self.FitRight.append(self.RightLine.current_fit)
 
         curvts = self.getCurvature(self.LeftLine.current_fit, self.RightLine.current_fit)
         self.LeftLine.radius_of_curvature = curvts[0]
         self.RightLine.radius_of_curvature = curvts[1]
+
+        left_fit = self.LeftLine.current_fit
+        right_fit = self.RightLine.current_fit
+
+        ploty = self.ploty
+        left_fitx = left_fit[0] * ploty ** 2 + left_fit[1] * ploty + left_fit[2]
+        right_fitx = right_fit[0] * ploty ** 2 + right_fit[1] * ploty + right_fit[2]
+
+        if len(self.LeftLine.recent_xfitted) < self.LeftLine.N:
+            self.LeftLine.recent_xfitted.append(left_fitx)
+        else:
+            self.LeftLine.recent_xfitted.pop(0)
+            self.LeftLine.recent_xfitted.append(left_fitx)
+
+        if len(self.RightLine.recent_xfitted) < self.RightLine.N:
+            self.RightLine.recent_xfitted.append(right_fitx)
+        else:
+            self.RightLine.recent_xfitted.pop(0)
+            self.RightLine.recent_xfitted.append(right_fitx)
+
         self.dist_to_left = self.get_dist_to_left()
 
     def setKF_PR(self,P,R):

@@ -204,6 +204,8 @@ class Line():
         self.detected = False
         # Save n fits
         self.N = 5
+        # Margin
+        self.margin = 50
         # x values of the last n fits of the line
         self.recent_xfitted = []
         # average x values of the fitted line over the last n iterations
@@ -229,6 +231,83 @@ class Line():
 
         self.MaxFail = 5
         self.fail_num = 0
+
+    def get_init_xy(self, base, binary_warped):
+        """Get initial valid pixel coordinates"""
+        out_img = np.dstack((binary_warped, binary_warped, binary_warped)) * 255
+
+        # Choose the number of sliding windows
+        nwindows = 9
+        # Set height of windows
+        window_height = np.int(binary_warped.shape[0] / nwindows)
+        # Identify the x and y positions of all nonzero pixels in the image
+        nonzero = binary_warped.nonzero()
+        nonzeroy = np.array(nonzero[0])
+        nonzerox = np.array(nonzero[1])
+        # Current positions to be updated for each window
+        x_current = base
+        # Set the width of the windows +/- margin
+        margin = self.margin
+        # Set minimum number of pixels found to recenter window
+        minpix = 50
+        # Create empty lists to receive left and right lane pixel indices
+        lane_inds = []
+
+        # Step through the windows one by one
+        for window in range(nwindows):
+            # Identify window boundaries in x and y (and right and left)
+            win_y_low = binary_warped.shape[0] - (window + 1) * window_height
+            win_y_high = binary_warped.shape[0] - window * window_height
+            win_x_low = x_current - margin
+            win_x_high = x_current + margin
+
+            # Draw the windows on the visualization image
+            cv2.rectangle(out_img, (win_x_low, win_y_low), (win_x_high, win_y_high),
+                          (0, 255, 0), 2)
+
+            # Identify the nonzero pixels in x and y within the window
+            good_inds = ((nonzeroy >= win_y_low) & (nonzeroy < win_y_high) &
+                              (nonzerox >= win_x_low) & (nonzerox < win_x_high)).nonzero()[0]
+
+            # Append these indices to the lists
+            lane_inds.append(good_inds)
+
+            # If you found > minpix pixels, recenter next window on their mean position
+            if len(good_inds) > minpix:
+                x_current = np.int(np.mean(nonzerox[good_inds]))
+
+        # Concatenate the arrays of indices
+        lane_inds = np.concatenate(lane_inds)
+
+        # Extract left and right line pixel positions
+        x = nonzerox[lane_inds]
+        y = nonzeroy[lane_inds]
+
+        self.allx = x
+        self.ally = y
+
+    def get_ctn_xy(self, binary_warped):
+        """Get valid pixel coordinates from previous detection"""
+        # Update last fit
+        self.last_fit = self.current_fit
+
+        # we know where the lines are in the previous frame
+        nonzero = binary_warped.nonzero()
+        nonzeroy = np.array(nonzero[0])
+        nonzerox = np.array(nonzero[1])
+        margin = self.margin
+
+        fit = self.current_fit
+        lane_inds = ((nonzerox > (fit[0] * (nonzeroy ** 2) + fit[1] * nonzeroy +
+                                  fit[2] - margin)) & (nonzerox < (fit[0] * (nonzeroy ** 2) +
+                                                                   fit[1] * nonzeroy + fit[
+                                                                                 2] + margin)))
+        # Extract left and right line pixel positions
+        x = nonzerox[lane_inds]
+        y = nonzeroy[lane_inds]
+
+        self.allx = x
+        self.ally = y
 
     def setNum(self, n):
         self.N = n
@@ -381,6 +460,310 @@ class Detector():
         """Get the binary gradient output of a RGB image"""
 
         return self.Gradient.preprocess(img)
+
+    def get_xy_pvalue(self, binary_warped):
+        """Get the xy pixel values for fitting"""
+        if self.LeftLine.detected:
+            self.LeftLine.get_ctn_xy(binary_warped)
+        else:
+            ploty = np.linspace(0, binary_warped.shape[0] - 1, binary_warped.shape[0])
+            self.ploty = ploty
+
+            histogram = np.sum(binary_warped[binary_warped.shape[0] // 2:, :], axis=0)
+            midpoint = np.int(histogram.shape[0] / 2)
+            leftx_base = np.argmax(histogram[:midpoint])
+            self.LeftLine.get_init_xy(leftx_base, binary_warped)
+
+        if self.RightLine.detected:
+            self.RightLine.get_ctn_xy(binary_warped)
+        else:
+            histogram = np.sum(binary_warped[binary_warped.shape[0] // 2:, :], axis=0)
+            midpoint = np.int(histogram.shape[0] / 2)
+            rightx_base = np.argmax(histogram[midpoint:]) + midpoint
+            self.RightLine.get_init_xy(rightx_base, binary_warped)
+
+    @profile
+    def detect(self, img):
+        """Detect lane lines on an image"""
+
+        self.img = img
+        # preprocessing img
+        self.undist = self._undistort(img)
+        #binary = self.performBinary(self.undist)
+        #binary_warped = self._warp(binary)
+
+        warped = self._warp(self.undist)
+
+        if self.debug:
+            db_gray = cv2.cvtColor(warped, cv2.COLOR_RGB2GRAY)
+            print('Mean gray = ', np.mean(db_gray))
+
+        binary_warped = self.performBinary(warped)
+        binary_warped = self._gaussian_blur(binary_warped)
+
+        # Get valid pixel coordinates
+        self.get_xy_pvalue(binary_warped)
+
+        # Fit a second order polynomial to each
+        left_fit = np.polyfit(self.LeftLine.ally, self.LeftLine.allx, 2)
+        right_fit = np.polyfit(self.RightLine.ally, self.RightLine.allx, 2)
+
+        self.sanityCheck(left_fit, right_fit)
+        self.update()
+
+        output = self.visualizeInput()
+        binOut = self.visualizeDetection(binary_warped)
+
+        # height = output.shape[0]
+        width = output.shape[1]
+        scaleDown = 0.4
+        height_s = math.floor(binOut.shape[0]*scaleDown)
+        width_s = math.floor(binOut.shape[1]*scaleDown)
+        #binOut = self._zoomImg(binOut, (scaleDown,scaleDown,1))# extremely slow
+        binOut = cv2.resize(binOut, (width_s, height_s))
+        output[0:height_s, (width-width_s):width,:] = binOut
+
+        return output#self.visualizeInput()
+
+    @profile
+    def visualizeDetection(self, img):
+        """Plot the detection result on the warped binary image"""
+        # Create an image to draw on and an image to show the selection window
+        if len(img.shape) > 2:
+            out_img = np.copy(img)
+        else:
+            out_img = np.dstack((img, img, img)) * 255
+
+        window_img = np.zeros_like(out_img)
+        # Color in left and right line pixels
+        #out_img[nonzeroy[left_lane_inds], nonzerox[left_lane_inds]] = [255, 0, 0]
+        #out_img[nonzeroy[right_lane_inds], nonzerox[right_lane_inds]] = [0, 0, 255]
+
+        left_fit = self.LeftLine.current_fit
+        right_fit = self.RightLine.current_fit
+        ploty = self.ploty
+        left_fitx = self.LeftLine.recent_xfitted[-1]
+        right_fitx = self.RightLine.recent_xfitted[-1]
+        margin = self.margin
+
+        # Generate a polygon to illustrate the search window area
+        # And recast the x and y points into usable format for cv2.fillPoly()
+        left_line_window1 = np.array([np.transpose(np.vstack([left_fitx - margin, ploty]))])
+        left_line_window2 = np.array([np.flipud(np.transpose(np.vstack([left_fitx + margin,
+                                                                        ploty])))])
+        left_line_pts = np.hstack((left_line_window1, left_line_window2))
+        right_line_window1 = np.array([np.transpose(np.vstack([right_fitx - margin, ploty]))])
+        right_line_window2 = np.array([np.flipud(np.transpose(np.vstack([right_fitx + margin,
+                                                                         ploty])))])
+        right_line_pts = np.hstack((right_line_window1, right_line_window2))
+
+        # Draw the lane onto the warped blank image
+        cv2.fillPoly(window_img, np.int_([left_line_pts]), (0, 255, 0))
+        cv2.fillPoly(window_img, np.int_([right_line_pts]), (0, 255, 0))
+        result = cv2.addWeighted(out_img, 1, window_img, 0.3, 0)
+
+        result[ploty.astype(np.int32), left_fitx.astype(np.int32)] = [255, 0, 0]
+        result[ploty.astype(np.int32), left_fitx.astype(np.int32)-1] = [255, 0, 0]
+        result[ploty.astype(np.int32), left_fitx.astype(np.int32)+1] = [255, 0, 0]
+        result[ploty.astype(np.int32), right_fitx.astype(np.int32)] = [255, 0, 0]
+        result[ploty.astype(np.int32), right_fitx.astype(np.int32)-1] = [255, 0, 0]
+        result[ploty.astype(np.int32), right_fitx.astype(np.int32)+1] = [255, 0, 0]
+
+        if self.debug:
+            plt.imshow(result)
+            plt.plot(left_fitx, ploty, color='yellow')
+            plt.plot(right_fitx, ploty, color='yellow')
+            plt.xlim(0, 1280)
+            plt.ylim(720, 0)
+            plt.show()
+
+        return result
+
+    @profile
+    def visualizeInput(self):
+        """Plot the result on the input RGB image"""
+
+        # Create an image to draw the lines on
+        color_warp = np.zeros_like(self.img).astype(np.uint8)
+        #color_warp = np.dstack((warp_zero, warp_zero, warp_zero))
+
+        left_fitx = self.LeftLine.recent_xfitted[-1]
+        right_fitx = self.RightLine.recent_xfitted[-1]
+        ploty = self.ploty
+        # Recast the x and y points into usable format for cv2.fillPoly()
+        pts_left = np.array([np.transpose(np.vstack([left_fitx, ploty]))])
+        pts_right = np.array([np.flipud(np.transpose(np.vstack([right_fitx, ploty])))])
+        pts = np.hstack((pts_left, pts_right))
+
+        # Draw the lane onto the warped blank image
+        cv2.fillPoly(color_warp, np.int_([pts]), (0, 255, 0))
+
+        # Warp the blank back to original image space using inverse perspective matrix (Minv)
+        newwarp = self._invwarp(color_warp)
+        # Combine the result with the original image
+        result = cv2.addWeighted(self.undist, 1, newwarp, 0.3, 0)
+
+        cv2.putText(result, "Radius of curvature = {:4d}m".format(math.floor(self.LeftLine.radius_of_curvature)),
+                    (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, 255, thickness=2)
+        cv2.putText(result, "Distance to left line = {:3.2f}m".format(self.dist_to_left),
+                    (10, 80), cv2.FONT_HERSHEY_SIMPLEX, 1, 255, thickness=2)
+
+        return result.astype(np.uint8)
+
+    @profile
+    def getCurvature(self, left_fit, right_fit):
+        """Calculate curvature of two lines"""
+        # Fit new polynomials to x,y in world space
+        ploty = self.ploty
+        ym_per_pix = self.ym_per_pix
+        xm_per_pix = self.xm_per_pix
+
+        leftx = left_fit[0] * ploty ** 2 + left_fit[1] * ploty + left_fit[2]
+        rightx = right_fit[0] * ploty ** 2 + right_fit[1] * ploty + right_fit[2]
+
+        y_eval = np.max(ploty)
+
+        left_fit_cr = np.polyfit(ploty * ym_per_pix, leftx * xm_per_pix, 2)
+        right_fit_cr = np.polyfit(ploty * ym_per_pix, rightx * xm_per_pix, 2)
+
+        # Calculate the new radii of curvature
+        left_curverad = ((1 + (2 * left_fit_cr[0] * y_eval * ym_per_pix + left_fit_cr[1]) ** 2) ** 1.5) / \
+                        np.absolute(2 * left_fit_cr[0])
+        right_curverad = ((1 + (2 * right_fit_cr[0] * y_eval * ym_per_pix + right_fit_cr[1]) ** 2) ** 1.5) / \
+                         np.absolute(2 * right_fit_cr[0])
+
+        return left_curverad, right_curverad
+
+    def get_dist_to_left(self):
+        xm_per_pix = self.xm_per_pix
+        dist_to_left = xm_per_pix * (self.img.shape[1] / 2 - self.LeftLine.recent_xfitted[-1][-1])
+
+        return dist_to_left
+
+    def distance(self):
+        print("The distance of two lines is .")
+        return 1.0
+
+    def sanityCheck(self, left_fit, right_fit):
+
+        self.LeftLine.diffs = left_fit - self.LeftLine.current_fit
+        self.RightLine.diffs = right_fit - self.RightLine.current_fit
+
+        curvts = self.getCurvature(left_fit, right_fit)
+        curvts = np.absolute(curvts)
+        ratio = np.max(curvts)/np.min(curvts)
+
+        ploty = self.ploty
+        left_fitx = left_fit[0] * ploty ** 2 + left_fit[1] * ploty + left_fit[2]
+        right_fitx = right_fit[0] * ploty ** 2 + right_fit[1] * ploty + right_fit[2]
+
+        dmax = np.max(np.absolute(left_fitx - right_fitx))
+        dmin = np.min(np.absolute(left_fitx - right_fitx))
+
+        if ratio > 5 or (dmax-dmin)/dmin > 0.3:
+            self.LeftLine.fail_num += 1
+            if self.LeftLine.fail_num == self.LeftLine.MaxFail:
+                # reset detection if fails MaxFail times in a row
+                self.InitializedLD = False
+                self.LeftLine.detected = False
+                self.RightLine.detected = False
+        else:
+            self.InitializedLD = True
+            self.LeftLine.detected = True
+            self.RightLine.detected = True
+
+            self.LeftLine.fail_num = 0
+
+            self.LeftLine.current_fit = left_fit
+            self.RightLine.current_fit = right_fit
+
+            # Pushback states
+            if len(self.LeftLine.fits) < self.LeftLine.N:
+                self.LeftLine.fits.append(self.LeftLine.current_fit)
+            else:
+                self.LeftLine.fits.pop(0)
+                self.LeftLine.fits.append(self.LeftLine.current_fit)
+
+            if len(self.RightLine.fits) < self.RightLine.N:
+                self.RightLine.fits.append(self.RightLine.current_fit)
+            else:
+                self.RightLine.fits.pop(0)
+                self.RightLine.fits.append(self.RightLine.current_fit)
+
+            if len(self.LeftLine.recent_xfitted) < self.LeftLine.N:
+                self.LeftLine.recent_xfitted.append(left_fitx)
+            else:
+                self.LeftLine.recent_xfitted.pop(0)
+                self.LeftLine.recent_xfitted.append(left_fitx)
+
+            if len(self.RightLine.recent_xfitted) < self.RightLine.N:
+                self.RightLine.recent_xfitted.append(right_fitx)
+            else:
+                self.RightLine.recent_xfitted.pop(0)
+                self.RightLine.recent_xfitted.append(right_fitx)
+
+    def update(self):
+        # Smooth the result
+        self.LeftLine.current_fit = np.mean(np.array(self.LeftLine.fits), axis=0)#self.LeftLine.last_fit
+        self.RightLine.current_fit = np.mean(np.array(self.RightLine.fits), axis=0)  # self.RightLine.last_fit
+
+        curvts = self.getCurvature(self.LeftLine.current_fit, self.RightLine.current_fit)
+        self.LeftLine.radius_of_curvature = curvts[0]
+        self.RightLine.radius_of_curvature = curvts[1]
+        self.dist_to_left = self.get_dist_to_left()
+
+    def setKF_PR(self,P,R):
+        self.KFLeft.setPR(P, R)
+        self.KFRight.setPR(P,R)
+
+    def _gaussian_blur(self, img, kernel_size=5):
+        """Applies a Gaussian Noise kernel"""
+        return cv2.GaussianBlur(img, (kernel_size, kernel_size), 0)
+
+    @profile
+    def _undistort(self, img):
+        """Apply image undistortion"""
+        return cv2.undistort(img, self.CameraMatrix, self.Distortion, None, self.CameraMatrix)
+
+    @profile
+    def _warp(self, img):
+        """Apply image warp transformation"""
+        return cv2.warpPerspective(img, self.WarpMatrix, (img.shape[1], img.shape[0]))
+
+    def _invwarp(self, img):
+        """Apply image inverse warp transformation"""
+        return cv2.warpPerspective(img, self.WarpMatrixInv, (img.shape[1], img.shape[0]))
+
+    @profile
+    def _zoomImg(self, img, scale):
+        return scipy.ndimage.zoom(img, scale)
+
+    def plotFit(self):
+        self._plotFit(self.FitLeft)
+        self._plotFit(self.FitRight)
+
+    def _plotFit(self, fits):
+        x = np.array(fits)
+        L = x.shape[0]
+        t = np.arange(0,L,1)
+
+        plt.figure(1)
+        plt.subplot(311)
+        plt.plot(t, x[:, 0])
+        plt.title('fit[0]')
+        plt.grid(True)
+
+        plt.subplot(312)
+        plt.plot(t, x[:, 1])
+        plt.title('fit[1]')
+        plt.grid(True)
+
+        plt.subplot(313)
+        plt.plot(t, x[:, 2])
+        plt.title('fit[2]')
+        plt.grid(True)
+
+        plt.show()
 
     def initDetection(self, binary_warped):
         """Initialize the detection"""
@@ -592,263 +975,6 @@ class Detector():
         self.RightLine.allx = rightx
         self.RightLine.ally = righty
 
-    @profile
-    def detect(self, img):
-        """Detect lane lines on an image"""
-
-        self.img = img
-        # preprocessing img
-        self.undist = self._undistort(img)
-        #binary = self.performBinary(self.undist)
-        #binary_warped = self._warp(binary)
-
-        warped = self._warp(self.undist)
-
-        if self.debug:
-            db_gray = cv2.cvtColor(warped, cv2.COLOR_RGB2GRAY)
-            print('Mean gray = ', np.mean(db_gray))
-
-        binary_warped = self.performBinary(warped)
-        binary_warped = self._gaussian_blur(binary_warped)
-
-        if self.InitializedLD:
-            # Detect based on previous detection
-            self.detectCtn(binary_warped)
-        else:
-            # Reset the detection
-            self.initDetection(binary_warped)
-            self.LeftLine.detected = True
-            self.RightLine.detected = True
-
-        ## Apply Kalman filter here
-        if self.UseKalmanFilter:
-            self.LeftLine.current_fit = self.KFLeft.update(self.LeftLine.current_fit)
-            self.RightLine.current_fit = self.KFRight.update(self.RightLine.current_fit)
-
-        self.FitLeft.append(self.LeftLine.current_fit)
-        self.FitRight.append(self.RightLine.current_fit)
-
-        # Generate x and y values for plotting
-        ploty = self.ploty
-        left_fit = self.LeftLine.current_fit
-        right_fit = self.RightLine.current_fit
-
-        left_fitx = left_fit[0] * ploty ** 2 + left_fit[1] * ploty + left_fit[2]
-        right_fitx = right_fit[0] * ploty ** 2 + right_fit[1] * ploty + right_fit[2]
-
-        self.LeftLine.recent_xfitted = left_fitx
-        self.RightLine.recent_xfitted = right_fitx
-
-        #async_result = self.pool.apply_async(self.visualizeDetection, (binary_warped, ))  # tuple of args for foo
-
-        # do some other stuff in the main process
-        #output = self.visualizeInput()
-        #binOut = async_result.get()
-
-        output = self.visualizeInput()
-        binOut = self.visualizeDetection(binary_warped)
-
-        # height = output.shape[0]
-        width = output.shape[1]
-        scaleDown = 0.4
-        height_s = math.floor(binOut.shape[0]*scaleDown)
-        width_s = math.floor(binOut.shape[1]*scaleDown)
-        #binOut = self._zoomImg(binOut, (scaleDown,scaleDown,1))# extremely slow
-        binOut = cv2.resize(binOut, (width_s, height_s))
-        output[0:height_s, (width-width_s):width,:] = binOut
-
-        return output#self.visualizeInput()
-        #return self.visualizeDetection(binary_warped)
-
-    @profile
-    def visualizeDetection(self, img):
-        """Plot the detection result on the warped binary image"""
-        # Create an image to draw on and an image to show the selection window
-        if len(img.shape) > 2:
-            out_img = np.copy(img)
-        else:
-            out_img = np.dstack((img, img, img)) * 255
-
-        window_img = np.zeros_like(out_img)
-        # Color in left and right line pixels
-        #out_img[nonzeroy[left_lane_inds], nonzerox[left_lane_inds]] = [255, 0, 0]
-        #out_img[nonzeroy[right_lane_inds], nonzerox[right_lane_inds]] = [0, 0, 255]
-
-        left_fit = self.LeftLine.current_fit
-        right_fit = self.RightLine.current_fit
-        ploty = self.ploty
-        left_fitx = self.LeftLine.recent_xfitted
-        right_fitx = self.RightLine.recent_xfitted
-        margin = self.margin
-
-        # Generate a polygon to illustrate the search window area
-        # And recast the x and y points into usable format for cv2.fillPoly()
-        left_line_window1 = np.array([np.transpose(np.vstack([left_fitx - margin, ploty]))])
-        left_line_window2 = np.array([np.flipud(np.transpose(np.vstack([left_fitx + margin,
-                                                                        ploty])))])
-        left_line_pts = np.hstack((left_line_window1, left_line_window2))
-        right_line_window1 = np.array([np.transpose(np.vstack([right_fitx - margin, ploty]))])
-        right_line_window2 = np.array([np.flipud(np.transpose(np.vstack([right_fitx + margin,
-                                                                         ploty])))])
-        right_line_pts = np.hstack((right_line_window1, right_line_window2))
-
-        # Draw the lane onto the warped blank image
-        cv2.fillPoly(window_img, np.int_([left_line_pts]), (0, 255, 0))
-        cv2.fillPoly(window_img, np.int_([right_line_pts]), (0, 255, 0))
-        result = cv2.addWeighted(out_img, 1, window_img, 0.3, 0)
-
-        result[ploty.astype(np.int32), left_fitx.astype(np.int32)] = [255, 0, 0]
-        result[ploty.astype(np.int32), left_fitx.astype(np.int32)-1] = [255, 0, 0]
-        result[ploty.astype(np.int32), left_fitx.astype(np.int32)+1] = [255, 0, 0]
-        result[ploty.astype(np.int32), right_fitx.astype(np.int32)] = [255, 0, 0]
-        result[ploty.astype(np.int32), right_fitx.astype(np.int32)-1] = [255, 0, 0]
-        result[ploty.astype(np.int32), right_fitx.astype(np.int32)+1] = [255, 0, 0]
-
-        # plt.imshow(result)
-        # plt.plot(left_fitx, ploty, color='yellow')
-        # plt.plot(right_fitx, ploty, color='yellow')
-        # plt.xlim(0, 1280)
-        # plt.ylim(720, 0)
-        # plt.show()
-        return result
-
-    @profile
-    def visualizeInput(self):
-        """Plot the result on the input RGB image"""
-
-        # Create an image to draw the lines on
-        color_warp = np.zeros_like(self.img).astype(np.uint8)
-        #color_warp = np.dstack((warp_zero, warp_zero, warp_zero))
-
-        left_fitx = self.LeftLine.recent_xfitted
-        right_fitx = self.RightLine.recent_xfitted
-        ploty = self.ploty
-        # Recast the x and y points into usable format for cv2.fillPoly()
-        pts_left = np.array([np.transpose(np.vstack([left_fitx, ploty]))])
-        pts_right = np.array([np.flipud(np.transpose(np.vstack([right_fitx, ploty])))])
-        pts = np.hstack((pts_left, pts_right))
-
-        # Draw the lane onto the warped blank image
-        cv2.fillPoly(color_warp, np.int_([pts]), (0, 255, 0))
-
-        # Warp the blank back to original image space using inverse perspective matrix (Minv)
-        newwarp = self._invwarp(color_warp)
-        # Combine the result with the original image
-        result = cv2.addWeighted(self.undist, 1, newwarp, 0.3, 0)
-
-        curvts = self.getCurvature()
-        cv2.putText(result, "Radius of curvature = {:4d}m".format(math.floor(curvts[0])),
-                    (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, 255, thickness=2)
-        cv2.putText(result, "Distance to left line = {:3.2f}m".format(self.dist_to_left),
-                    (10, 80), cv2.FONT_HERSHEY_SIMPLEX, 1, 255, thickness=2)
-        #plt.imshow(result)
-        #plt.show()
-        return result.astype(np.uint8)
-
-    @profile
-    def getCurvature(self):
-        """Calculate curvature of two lines"""
-        # Fit new polynomials to x,y in world space
-        ploty = self.ploty
-        ym_per_pix = self.ym_per_pix
-        xm_per_pix = self.xm_per_pix
-        leftx = self.LeftLine.recent_xfitted
-        rightx = self.RightLine.recent_xfitted
-        y_eval = np.max(ploty)
-
-        left_fit_cr = np.polyfit(ploty * ym_per_pix, leftx * xm_per_pix, 2)
-        right_fit_cr = np.polyfit(ploty * ym_per_pix, rightx * xm_per_pix, 2)
-
-
-        # Calculate the new radii of curvature
-        left_curverad = ((1 + (2 * left_fit_cr[0] * y_eval * ym_per_pix + left_fit_cr[1]) ** 2) ** 1.5) / \
-                        np.absolute(2 * left_fit_cr[0])
-        right_curverad = ((1 + (2 * right_fit_cr[0] * y_eval * ym_per_pix + right_fit_cr[1]) ** 2) ** 1.5) / \
-                         np.absolute(2 * right_fit_cr[0])
-        self.LeftLine.radius_of_curvature = left_curverad
-        self.RightLine.radius_of_curvature =right_curverad
-        self.dist_to_left = xm_per_pix * (self.img.shape[1]/2 - self.LeftLine.recent_xfitted[-1])
-        return left_curverad, right_curverad
-
-    def distance(self):
-        print("The distance of two lines is .")
-        return 1.0
-
-    def sanityCheck(self):
-        self.distTop = 0
-        self.distButtom = 0
-
-
-        pass
-
-    def _calculateCurvature(self, fit):
-        pass
-
-    def setKF_PR(self,P,R):
-        self.KFLeft.setPR(P, R)
-        self.KFRight.setPR(P,R)
-
-    def _gaussian_blur(self, img, kernel_size=5):
-        """Applies a Gaussian Noise kernel"""
-        return cv2.GaussianBlur(img, (kernel_size, kernel_size), 0)
-
-    @profile
-    def _undistort(self, img):
-        """Apply image undistortion"""
-        return cv2.undistort(img, self.CameraMatrix, self.Distortion, None, self.CameraMatrix)
-
-    @profile
-    def _warp(self, img):
-        """Apply image warp transformation"""
-        return cv2.warpPerspective(img, self.WarpMatrix, (img.shape[1], img.shape[0]))
-
-    def _invwarp(self, img):
-        """Apply image inverse warp transformation"""
-        return cv2.warpPerspective(img, self.WarpMatrixInv, (img.shape[1], img.shape[0]))
-
-    @profile
-    def _zoomImg(self, img, scale):
-        return scipy.ndimage.zoom(img, scale)
-
-    def plotFit(self):
-        self._plotFit(self.FitLeft)
-        self._plotFit(self.FitRight)
-
-    def _plotFit(self, fits):
-        x = np.array(fits)
-        L = x.shape[0]
-        t = np.arange(0,L,1)
-
-        plt.figure(1)
-        plt.subplot(311)
-        plt.plot(t, x[:, 0])
-        plt.title('fit[0]')
-        plt.grid(True)
-
-        plt.subplot(312)
-        plt.plot(t, x[:, 1])
-        plt.title('fit[1]')
-        plt.grid(True)
-
-        plt.subplot(313)
-        plt.plot(t, x[:, 2])
-        plt.title('fit[2]')
-        plt.grid(True)
-
-        '''
-        f, (ax1, ax2, ax3) = plt.subplots(3, sharex=True, sharey=False)
-
-
-        ax1.plot(t, x[:,0])
-        ax1.title('fit0')
-        ax2.plot(t, x[:,1])
-        ax2.title('fit[1]')
-        ax3.plot(t, x[:,2])
-        ax3.title('fit[2]')
-        #f.subplots_adjust(hspace=0)
-        '''
-        plt.show()
-
 def test():
     # Read in the saved camera matrix and distortion coefficients
     dist_pickle = pickle.load( open( "camera_cal/wide_dist_pickle.p", "rb" ) )
@@ -863,9 +989,9 @@ def test():
     a.LeftLine.test()
     a.debug = True
 
-    #img = mpimg.imread('test_images/straight_lines1.jpg')
+    img = mpimg.imread('test_images/straight_lines1.jpg')
     #img = mpimg.imread('./frames/1043.jpg')
-    img = mpimg.imread('./challenge_frames/0468.jpg')
+    #img = mpimg.imread('./challenge_frames/0468.jpg')
     #img = img.astype(np.uint8)
 
     tmp = a.detect(img)
@@ -909,7 +1035,6 @@ def testKF():
     detector.setMargin(60)
     detector.setBinaryFun(flag=5)
     detector.switchKF(False)
-
 
     # Import everything needed to edit/save/watch video clips
     from moviepy.editor import VideoFileClip

@@ -1,18 +1,17 @@
-import pickle
-import cv2
-import numpy as np
 import math
-import matplotlib.pyplot as plt
-import matplotlib.image as mpimg
-import scipy.ndimage
-
-from multiprocessing.pool import ThreadPool
-
+import pickle
 import time
 from functools import wraps
 
+import cv2
+import matplotlib.image as mpimg
+import matplotlib.pyplot as plt
+import numpy as np
+import scipy.ndimage
+
 ### define profilers (https://stackoverflow.com/questions/3620943/measuring-elapsed-time-with-the-time-module)
 PROF_DATA = {}
+
 
 def profile(fn):
     @wraps(fn)
@@ -31,6 +30,7 @@ def profile(fn):
         return ret
 
     return with_profiling
+
 
 def print_prof_data():
     for fname, data in PROF_DATA.items():
@@ -196,6 +196,7 @@ class LightAutoGrad(Gradient):
         combined_binary[(s_binary == 1) | (sxbinary == 1)] = 1
 
         return combined_binary
+
 
 # Define a class to receive the characteristics of each line detection
 class Line():
@@ -493,9 +494,6 @@ class Detector():
         self.img = img
         # preprocessing img
         self.undist = self._undistort(img)
-        #binary = self.performBinary(self.undist)
-        #binary_warped = self._warp(binary)
-
         warped = self._warp(self.undist)
 
         if self.debug:
@@ -512,7 +510,12 @@ class Detector():
         left_fit = np.polyfit(self.LeftLine.ally, self.LeftLine.allx, 2)
         right_fit = np.polyfit(self.RightLine.ally, self.RightLine.allx, 2)
 
+        if self.UseKalmanFilter:
+            left_fit = self.KFLeft.update(left_fit)
+            right_fit = self.KFRight.update(right_fit)
+
         self.sanityCheck(left_fit, right_fit)
+
         self.update()
 
         output = self.visualizeInput()
@@ -523,11 +526,11 @@ class Detector():
         scaleDown = 0.4
         height_s = math.floor(binOut.shape[0]*scaleDown)
         width_s = math.floor(binOut.shape[1]*scaleDown)
-        #binOut = self._zoomImg(binOut, (scaleDown,scaleDown,1))# extremely slow
+
         binOut = cv2.resize(binOut, (width_s, height_s))
         output[0:height_s, (width-width_s):width,:] = binOut
 
-        return output#self.visualizeInput()
+        return output
 
     @profile
     def visualizeDetection(self, img):
@@ -687,25 +690,6 @@ class Detector():
                                                                                       axis=0)
             self.RightLine.current_fit = a1 * self.RightLine.current_fit + a2 * np.mean(np.array(self.RightLine.fits),
                                                                                         axis=0)
-
-            # Pushback states
-            if len(self.LeftLine.fits) < self.LeftLine.N:
-                self.LeftLine.fits.append(self.LeftLine.current_fit*0.7)
-            else:
-                self.LeftLine.fits.pop(0)
-                self.LeftLine.fits.append(self.LeftLine.current_fit*0.7)
-
-            if len(self.RightLine.fits) < self.RightLine.N:
-                self.RightLine.fits.append(self.RightLine.current_fit*0.7)
-            else:
-                self.RightLine.fits.pop(0)
-                self.RightLine.fits.append(self.RightLine.current_fit*0.7)
-
-            if self.LeftLine.fail_num == self.LeftLine.MaxFail:
-                # reset detection if fails MaxFail times in a row
-                self.InitializedLD = False
-                self.LeftLine.detected = False
-                self.RightLine.detected = False
         else:
             self.InitializedLD = True
             self.LeftLine.detected = True
@@ -729,18 +713,18 @@ class Detector():
                     self.RightLine.current_fit = right_fit
                     self.RightLine.recent_xfitted.append(right_fitx)
 
-            # Pushback states
-            if len(self.LeftLine.fits) < self.LeftLine.N:
-                self.LeftLine.fits.append(self.LeftLine.current_fit)
-            else:
-                self.LeftLine.fits.pop(0)
-                self.LeftLine.fits.append(self.LeftLine.current_fit)
+        # Pushback states
+        if len(self.LeftLine.fits) < self.LeftLine.N:
+            self.LeftLine.fits.append(self.LeftLine.current_fit)
+        else:
+            self.LeftLine.fits.pop(0)
+            self.LeftLine.fits.append(self.LeftLine.current_fit)
 
-            if len(self.RightLine.fits) < self.RightLine.N:
-                self.RightLine.fits.append(self.RightLine.current_fit)
-            else:
-                self.RightLine.fits.pop(0)
-                self.RightLine.fits.append(self.RightLine.current_fit)
+        if len(self.RightLine.fits) < self.RightLine.N:
+            self.RightLine.fits.append(self.RightLine.current_fit)
+        else:
+            self.RightLine.fits.pop(0)
+            self.RightLine.fits.append(self.RightLine.current_fit)
 
     def update(self):
         self.FitLeft.append(self.LeftLine.current_fit)
@@ -1078,8 +1062,6 @@ def test3():
 
 def testKF():
     import pickle
-    import matplotlib.pyplot as plt
-    import matplotlib.image as mpimg
 
     dist_pickle = pickle.load(open("camera_cal/wide_dist_pickle.p", "rb"))
     mtx = dist_pickle["mtx"]
@@ -1097,7 +1079,6 @@ def testKF():
 
     # Import everything needed to edit/save/watch video clips
     from moviepy.editor import VideoFileClip
-    from IPython.display import HTML
 
     white_output = 'output_images/project_output_v2_kf_tmp.mp4'
     ## To speed up the testing process you may want to try your pipeline on a shorter subclip of the video

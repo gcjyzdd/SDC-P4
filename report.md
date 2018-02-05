@@ -105,13 +105,17 @@ I implemented this step in the code cell 13 of the IPython notebook file. Here i
 
 #### 1. Provide a link to your final video output.  Your pipeline should perform reasonably well on the entire project video (wobbly lines are ok but no catastrophic failures that would cause the car to drive off the road!).
 
-Here's a [link to my video result](./output_images/project_output.mp4)
+Here's a [link to my video result](output_images/project_output_v2_kf.mp4)
 
 ---
 
 ### Discussion
 
 #### 1. Briefly discuss any problems / issues you faced in your implementation of this project.  Where will your pipeline likely fail?  What could you do to make it more robust?
+
+Problems:
+
+  * I tested my pipeline on the harder chalenge video and it performed badly after a few seconds. Because the pipeline 'remembers' a few detected lines in the past, the lane lines are not updated in time. When I reduced the number of buffer, the pipeline becomes sensitive to noises and the detected lines tilt frequently. This problem gets me stuck for a lot of time and I don't have a solution now.
 
 Here are the steps I used in this project:
 
@@ -128,6 +132,7 @@ Here are the steps I used in this project:
 7. Plot the detected lanelines on the input image
 
 The pipeline could fail if:
-    1. the light condition is abnormal, for example, very dark, very bright, or shadows. The color transformed features are sensitive to light conditions
-    2. the road is very curved. Because we buffer the detected lanelines and smooth the polynomial coeeficients using averaged values, the pipeline could be delayed to update fitting coefficients
+
+  1. the light condition is abnormal, for example, very dark, very bright, or shadows. The color transformed features are sensitive to light conditions
+  2. the road is very curved. Because we buffer the detected lanelines and smooth the polynomial coeeficients using averaged values, the pipeline could be delayed to update fitting coefficients
     

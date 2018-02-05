@@ -120,7 +120,7 @@ class SXGrad(Gradient):
     """Calculate S-Channel and X directional sobel gradient"""
     def preprocess(self, img):
         # grayscale image
-        gray = cv2.cvtColor(img, cv2.COLdetectorOR_RGB2GRAY)
+        gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
         # sobel operation applied to x axis
         sobelx = cv2.Sobel(gray, cv2.CV_64F, 1, 0)
         # Get absolute values
@@ -320,8 +320,8 @@ class Line():
 class KalmanFilter():
     """Implement a simple Kalman filter"""
     def __init__(self, n_in, q=(1,1,1), R=(1,1,1)):
-        self.P = np.array(q)#np.array([[q[0],0,0],[0,q[1],0],[0,0,q[2]]], np.float64)
-        self.R = np.array(R)#np.array([[R[0],0,0],[0,R[1],0],[0,0,R[2]]], np.float64)
+        self.P = np.array(q)  # np.array([[q[0],0,0],[0,q[1],0],[0,0,q[2]]], np.float64)
+        self.R = np.array(R)  # np.array([[R[0],0,0],[0,R[1],0],[0,0,R[2]]], np.float64)
         self.K = None
         self.P_pr = None
         self.X = np.zeros((n_in, ), np.float64)
@@ -678,7 +678,7 @@ class Detector():
 
         self.LeftLine.current_fit = left_fit
         self.RightLine.current_fit = right_fit
-        a1 = 0.8
+        a1 = 0.1
         a2 = 1 - a1
         if ratio > 5 or (dmax > 900 or dmin < 400):  # or (dmax-dmin)/dmin > 0.5
             self.LeftLine.fail_num += 1

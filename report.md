@@ -93,11 +93,15 @@ Then I did some other stuff and fit my lane lines with a 2nd order polynomial ki
 
 I did this in lines 628 through 650 in my code in [detector.py](./detector.py).
 
+In my code, `xm_per_pix` is calculated by 3.7/700, where 3.7m is the width of the lane and 700px is the width of the lane on the image. 
+
 #### 6. Provide an example image of your result plotted back down onto the road such that the lane area is identified clearly.
 
 I implemented this step in the code cell 13 of the IPython notebook file. Here is an example of my result on a test image:
 
 <div style="text-align:center"><img width=100% src ='output_images/test_straight1_detect.png' /></div>
+
+**Notes**: in my previous report, I displayed the distance from the center of the vehicle to the left lane line, which is about 1.85m. Now I updated my code to display the distance from the vehicle center to the lane center, which should be close to zero if the car is driving straight. When the displayed distance is positive, it means the vehicle is right to the lane center; while the value is negative, it means the vehicle is left to the lane center.
 
 ---
 

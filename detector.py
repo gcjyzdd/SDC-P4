@@ -414,6 +414,7 @@ class Detector():
         self.ploty = None
         self.distTop = 0
         self.dist_to_left = 0
+        self.dist_to_center = 0
         self.distButtom = 0
         self.img = None
         self.undist = None
@@ -615,7 +616,7 @@ class Detector():
 
         cv2.putText(result, "Radius of curvature = {:4d}m".format(math.floor(self.LeftLine.radius_of_curvature)),
                     (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, 255, thickness=2)
-        cv2.putText(result, "Distance to left line = {:3.2f}m".format(self.dist_to_left),
+        cv2.putText(result, "Distance to center = {:3.2f}m".format(self.dist_to_center),
                     (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 1, 255, thickness=2)
         cv2.putText(result, "CvtRatio = {:3.2f}".format(self.CurvtRatio),
                     (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 1, 255, thickness=2)
@@ -654,6 +655,13 @@ class Detector():
         dist_to_left = xm_per_pix * (self.img.shape[1] / 2 - self.LeftLine.recent_xfitted[-1][-1])
 
         return dist_to_left
+
+    def get_dist_to_center(self):
+        xm_per_pix = self.xm_per_pix
+        dist_to_top = xm_per_pix * (self.img.shape[1] / 2 -
+                                     (self.LeftLine.recent_xfitted[-1][-1] + self.RightLine.recent_xfitted[-1][-1])/2)
+
+        return dist_to_top
 
     def distance(self):
         print("The distance of two lines is .")
@@ -754,6 +762,7 @@ class Detector():
             self.RightLine.recent_xfitted.append(right_fitx)
 
         self.dist_to_left = self.get_dist_to_left()
+        self.dist_to_center = self.get_dist_to_center()
 
     def setKF_PR(self,P,R):
         self.KFLeft.setPR(P, R)
